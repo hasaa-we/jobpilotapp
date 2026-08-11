@@ -531,6 +531,37 @@ def _enrich_one(job: dict) -> dict:
 _SENIORITY_UNSET = {"not applicable", "not specified", "n/a", ""}
 
 
+def find_job_posting(company: str, role: str, location: str = "Worldwide", limit: int = 25):
+    """
+    Locates the real LinkedIn posting behind a tracked application.
+
+    Interview questions written from a job *title* alone are generic guesses. The
+    posting itself names the stack, the seniority and the responsibilities the
+    panel will actually probe, so it's worth a search to find it.
+
+    Returns the job dict including its description, or None if no posting from
+    that company can be matched.
+    """
+    target = (company or "").strip().lower()
+    if not target:
+        return None
+
+    # Company-qualified search first; falling back to the bare role catches
+    # postings whose company name is spelled differently on LinkedIn.
+    for query in (f"{role} {company}".strip(), (role or "").strip()):
+        if not query:
+            continue
+        for job in search_linkedin_jobs(query, location, limit=limit):
+            listed = (job.get("company") or "").strip().lower()
+            if not listed:
+                continue
+            if listed == target or target in listed or listed in target:
+                job.update(fetch_job_details(job.get("job_id") or job.get("url", "")))
+                if job.get("description"):
+                    return job
+    return None
+
+
 def _matches_filters(job: dict, wt_codes, jt_codes, exp_codes):
     """
     Returns True (keep), False (contradicts the filter) or None (LinkedIn wouldn't say).

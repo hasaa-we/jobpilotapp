@@ -113,6 +113,101 @@ Job Description:
     return response.choices[0].message.content
 
 
+# ─── Interview Prep ───
+
+async def generate_interview_questions(company: str, role: str, job_description: str = None,
+                                       resume_text: str = None, already_asked: list = None,
+                                       count: int = 10) -> list:
+    """
+    Writes interview questions for one specific job, with answers.
+
+    Grounded in the real posting wherever one was found, because questions written
+    from a job title alone come out generic — every backend role gets "tell me
+    about a time you debugged something". The posting names the stack, the scale
+    and the responsibilities the panel will actually probe.
+
+    Answers are drawn from the CV when the question is about the candidate. When a
+    question is factual or technical the answer stands on its own, and when the CV
+    simply doesn't cover what's being asked, the gap is named instead of invented.
+
+    `already_asked` lets a second round produce genuinely different questions rather
+    than rephrasings of the first.
+    """
+    grounding = (
+        f"THE ACTUAL JOB POSTING:\n{job_description[:6000]}"
+        if job_description and len(job_description) > 200
+        else "No posting text was available. Base the questions on what this role at "
+             "this company would realistically involve, and keep them concrete."
+    )
+
+    avoid = ""
+    if already_asked:
+        listed = "\n".join(f"- {q}" for q in already_asked[:40])
+        avoid = (
+            f"\n\nALREADY ASKED — do not repeat these or rephrase them. Go deeper or "
+            f"into different territory:\n{listed}"
+        )
+
+    cv_block = (
+        f"CANDIDATE'S CV:\n{resume_text[:8000]}"
+        if resume_text and resume_text.strip()
+        else "No CV available — answer generically and say what the candidate should prepare."
+    )
+
+    prompt = f"""You are preparing a candidate for a real interview at {company} for the role of {role}.
+
+{grounding}
+
+{cv_block}{avoid}
+
+Write exactly {count} questions this panel would realistically ask.
+
+RULES
+- Tie questions to what the posting actually asks for — the named technologies,
+  responsibilities and seniority. If it stresses a specific skill, probe it.
+- Mix categories: role-specific technical, experience/behavioural, situational,
+  and questions about the company or the candidate's motivation.
+- No filler. "Tell me about yourself" only if you make it specific to this role.
+- Every answer must be something the candidate can actually say out loud —
+  concrete and in first person, not advice about how to answer.
+- Use the CV for anything about their background, and name real things from it.
+- If the CV lacks what the question needs, still give the best answer you can from
+  what is there, and put the missing piece in "needs_from_you".
+- If a question doesn't depend on the candidate at all (a technical definition,
+  say), answer it properly and set "from_cv" to false.
+
+Return JSON:
+{{
+  "questions": [
+    {{
+      "question": "the question as it would be asked",
+      "category": "Technical" | "Experience" | "Situational" | "Company" | "Motivation",
+      "why_asked": "one short line on why this job in particular prompts it",
+      "answer": "a complete answer the candidate can say, in first person",
+      "from_cv": true or false,
+      "needs_from_you": "what the candidate must supply because the CV lacks it, or null"
+    }}
+  ]
+}}"""
+
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4o",
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": "You are an experienced interviewer and coach. Output raw JSON only."},
+                {"role": "user", "content": prompt},
+            ],
+            # A little variance so a second round explores new ground rather than
+            # re-deriving the same list.
+            temperature=0.5 if already_asked else 0.3,
+        )
+        return json.loads(response.choices[0].message.content).get("questions", [])
+    except Exception as e:
+        print(f"Error generating interview questions for {company}: {e}")
+        return []
+
+
 # ─── Follow-Up Email ───
 
 async def draft_follow_up(company: str, role: str, days_since: int) -> str:

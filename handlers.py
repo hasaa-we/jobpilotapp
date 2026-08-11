@@ -17,12 +17,12 @@ from database import (
 )
 from ai_services import (
     score_resume, tailor_resume, generate_cover_letter,
-    draft_follow_up,
+    draft_follow_up, generate_interview_questions,
     classify_user_intent, parse_job_email, parse_job_search_query
 )
 import asyncio
 from linkedin_services import (
-    search_linkedin_jobs, apply_linkedin_filters, build_linkedin_url,
+    search_linkedin_jobs, apply_linkedin_filters, build_linkedin_url, find_job_posting,
     resolve_location, WORK_TYPES, JOB_TYPES, EXPERIENCE_LEVELS, DATE_POSTED
 )
 from gmail_services import decrypt_token, fetch_recent_job_emails
@@ -321,6 +321,126 @@ STATUS_EMOJI = {
     "rejected": "❌",
     "ghosted": "👻"
 }
+
+# ─── Interview Prep ───
+
+async def send_long(bot, chat_id: int, text: str, reply_markup=None):
+    """
+    Sends text that may exceed Telegram's 4096-character limit.
+
+    Splits on question boundaries so an answer is never cut in half, and only the
+    final chunk carries the keyboard.
+    """
+    limit = 3500
+    chunks, current = [], ""
+    for block in text.split("\n\n"):
+        if len(current) + len(block) + 2 > limit and current:
+            chunks.append(current)
+            current = block
+        else:
+            current = f"{current}\n\n{block}" if current else block
+    if current:
+        chunks.append(current)
+
+    for i, chunk in enumerate(chunks):
+        markup = reply_markup if i == len(chunks) - 1 else None
+        try:
+            await bot.send_message(chat_id=chat_id, text=chunk, reply_markup=markup, parse_mode="Markdown")
+        except Exception as e:
+            print(f"Chunk send failed ({e}); retrying without markdown")
+            await bot.send_message(chat_id=chat_id, text=re.sub(r"[*_`]", "", chunk), reply_markup=markup)
+        await asyncio.sleep(0.1)
+
+
+def format_interview_questions(questions: list, start_number: int = 1) -> str:
+    """Renders questions with their answers, flagging anything the CV can't cover."""
+    out = ""
+    for i, q in enumerate(questions, start_number):
+        out += f"\n\n**{i}. {md(q.get('question', ''))}**\n"
+        if q.get('category'):
+            out += f"_{md(q['category'])}_"
+            if q.get('why_asked'):
+                out += f" — _{md(q['why_asked'])}_"
+            out += "\n"
+        if q.get('answer'):
+            out += f"\n💬 {md(q['answer'])}\n"
+        if q.get('needs_from_you'):
+            out += f"\n⚠️ **You need to add:** {md(q['needs_from_you'])}\n"
+    return out.strip()
+
+
+async def interview_prep_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generates interview questions for one tracked application."""
+    query = update.callback_query
+    await query.answer()
+
+    app_id = query.data.split(":", 1)[1]
+    is_more = query.data.startswith("prep_more:")
+    chat_id = update.effective_chat.id
+
+    app = get_application(app_id)
+    if not app:
+        await query.edit_message_text("⚠️ That application no longer exists.")
+        return
+
+    user = update.effective_user
+    db_user, _ = get_or_create_user(user.id, user.username)
+    company, role = app.get('company', ''), app.get('role', '')
+
+    asked_key = f"prep_asked:{app_id}"
+    already = context.user_data.get(asked_key, [])
+
+    status = await context.bot.send_message(
+        chat_id,
+        f"🎤 Preparing for **{md(company)}** — {md(role)}\n\n"
+        + ("🔍 Writing another 10 questions..." if is_more
+           else "🔍 Finding the real job posting on LinkedIn..."),
+        parse_mode="Markdown",
+    )
+
+    # The posting is fetched once and cached for this application, so "10 more"
+    # doesn't repeat a slow LinkedIn search.
+    posting_key = f"prep_posting:{app_id}"
+    posting = context.user_data.get(posting_key)
+    if posting is None:
+        posting = app.get('job_description') or ""
+        if not posting:
+            found = await asyncio.to_thread(find_job_posting, company, role)
+            posting = (found or {}).get('description', "")
+        context.user_data[posting_key] = posting
+
+    if not is_more:
+        await status.edit_text(
+            f"🎤 Preparing for **{md(company)}** — {md(role)}\n\n"
+            + ("✅ Found the posting — writing questions from it..." if posting
+               else "⚠️ Couldn't find the posting — writing from the role instead..."),
+            parse_mode="Markdown",
+        )
+
+    questions = await generate_interview_questions(
+        company=company, role=role, job_description=posting,
+        resume_text=db_user.get('resume_text'), already_asked=already, count=10,
+    )
+
+    if not questions:
+        await status.edit_text("⚠️ Couldn't generate questions right now. Please try again.")
+        return
+
+    context.user_data[asked_key] = already + [q.get('question', '') for q in questions]
+
+    header = (
+        f"🎤 **Interview Prep — {md(company)}**\n{md(role)}\n"
+        f"{'📋 Based on the real LinkedIn posting' if posting else '📋 Based on the role (posting not found)'}\n"
+        f"──────────────────"
+    )
+    body = format_interview_questions(questions, start_number=len(already) + 1)
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("➕ 10 more questions", callback_data=f"prep_more:{app_id}")
+    ]])
+
+    await status.delete()
+    await send_long(context.bot, chat_id, f"{header}\n{body}", reply_markup=keyboard)
+
 
 # ─── Email → Applications ───
 
@@ -697,6 +817,7 @@ async def view_apps(update: Update, context: ContextTypes.DEFAULT_TYPE):
         emoji = STATUS_EMOJI.get(app['status'], "📤")
         card = f"{emoji} **{app['company']}** — {app['role']}\nStatus: `{app['status'].title()}`"
         keyboard = [
+            [InlineKeyboardButton("🎤 Interview Prep", callback_data=f"prep:{app['id']}")],
             [InlineKeyboardButton("📝 Update Status", callback_data=f"update:{app['id']}"),
              InlineKeyboardButton("🗑️ Delete", callback_data=f"delete_app:{app['id']}")]
         ]
