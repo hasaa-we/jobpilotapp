@@ -215,19 +215,34 @@ async def inbound_email(request: Request):
         found = detect_forwarding_confirmation(record)
         (confirmations.append(found) if found else job_records.append(record))
 
+    # Logged so an unrecognised variant can be diagnosed from the Render logs
+    # rather than by guessing at Gmail's wording.
+    for record in records:
+        print(f"Inbound: from={record.get('sender_email')!r} subject={record.get('subject')!r}")
+
     for confirmation in confirmations:
         message = "📬 **Gmail forwarding confirmation**\n\n"
         if confirmation.get("code"):
             message += f"Your confirmation code:\n\n`{confirmation['code']}`\n_(tap to copy)_\n\n"
             message += "Paste it into Gmail → Settings → *Forwarding and POP/IMAP* → **Verify**.\n"
         if confirmation.get("link"):
-            message += f"\nOr just open this link to confirm:\n{confirmation['link']}"
+            message += f"\nOr just tap this link to confirm:\n{confirmation['link']}\n"
+        if not confirmation.get("code") and not confirmation.get("link"):
+            # Couldn't parse it — hand over the text so the user isn't stuck.
+            message += (
+                "I couldn't read the code automatically, so here's the email:\n\n"
+                f"{confirmation.get('excerpt', '')}"
+            )
         try:
             await ptb_app.bot.send_message(
                 chat_id=db_user['telegram_id'], text=message, parse_mode="Markdown"
             )
         except Exception as e:
-            print(f"Could not relay confirmation to {db_user.get('telegram_id')}: {e}")
+            print(f"Could not relay confirmation as Markdown ({e}); retrying as plain text")
+            try:
+                await ptb_app.bot.send_message(chat_id=db_user['telegram_id'], text=message)
+            except Exception as inner:
+                print(f"Could not relay confirmation to {db_user.get('telegram_id')}: {inner}")
 
     if not job_records:
         return {"ok": True, "confirmations": len(confirmations)}

@@ -196,16 +196,27 @@ def detect_forwarding_confirmation(record: dict):
     """
     Recognises Gmail's forwarding-confirmation email.
 
-    Returns {'code', 'link'} when this is one, else None.
+    Returns {'code', 'link', 'excerpt'} when this is one, else None.
+
+    Recognition is deliberately loose and never gives up once the sender looks like
+    Google's forwarding robot: if the code can't be parsed, the message is still
+    relayed with an excerpt so the user can read the code themselves. Silently
+    dropping this email makes forwarding impossible to enable, which is a far worse
+    failure than relaying something slightly untidy.
     """
     sender = (record.get("sender_email") or "").lower()
+    from_header = (record.get("sender") or "").lower()
     subject = record.get("subject") or ""
     body = record.get("body") or ""
+    lowered = subject.lower()
 
     is_confirmation = (
-        _CONFIRM_SENDER in sender
-        or "forwarding confirmation" in subject.lower()
-        or "verify" in subject.lower() and "forward" in subject.lower()
+        "forwarding-noreply" in sender
+        or "forwarding-noreply" in from_header
+        or "forwarding confirmation" in lowered
+        or ("forward" in lowered and ("confirm" in lowered or "verify" in lowered))
+        or "gmail forwarding" in lowered
+        or "has requested to automatically forward mail" in body.lower()
     )
     if not is_confirmation:
         return None
@@ -217,9 +228,7 @@ def detect_forwarding_confirmation(record: dict):
     # Trailing punctuation from the surrounding sentence isn't part of the URL.
     link = link_match.group(0).rstrip(").,;>'\"") if link_match else None
 
-    if not code and not link:
-        return None
-    return {"code": code, "link": link}
+    return {"code": code, "link": link, "excerpt": body[:700], "subject": subject}
 
 
 def address_token(to_address: str) -> str:
