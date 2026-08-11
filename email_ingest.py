@@ -189,7 +189,9 @@ def _is_meaningful(record: dict) -> bool:
 _CONFIRM_SENDER = "forwarding-noreply@google.com"
 _CONFIRM_CODE = re.compile(r"\(#(\d{6,})\)")
 _CONFIRM_CODE_BODY = re.compile(r"confirmation code[:\s]+(\d{6,})", re.I)
-_CONFIRM_LINK = re.compile(r"https://mail\.google\.com/\S+")
+# Google sends this from mail-settings.google.com, not mail.google.com, and the URL
+# carries percent-encoded brackets — so match the host loosely and keep the path intact.
+_CONFIRM_LINK = re.compile(r"https://[\w.-]*google\.com/\S*vf-\S+|https://[\w.-]*google\.com/mail/\S+")
 
 
 def detect_forwarding_confirmation(record: dict):
