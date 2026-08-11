@@ -391,16 +391,24 @@ async def ingest_job_emails(db_user: dict, emails: list) -> dict:
 
     return outcome
 
+async def forwarding_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Same instructions, reached from the Manage Accounts button."""
+    query = update.callback_query
+    await query.answer()
+    await forwarding_command(update, context)
+
+
 async def forwarding_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows the user their private forwarding address and how to wire it up."""
     user = update.effective_user
     db_user, _ = get_or_create_user(user.id, user.username)
+    chat_id = update.effective_chat.id
 
     inbox_domain = os.getenv("INBOX_DOMAIN")
     if not inbox_domain:
-        await update.message.reply_text(
-            "📮 Email forwarding isn't configured on this server yet.\n\n"
-            "Use **🔗 Manage Accounts** to connect Gmail directly for now.",
+        await context.bot.send_message(
+            chat_id,
+            "📮 Email forwarding isn't set up on this server yet.",
             parse_mode="Markdown",
         )
         return
@@ -408,7 +416,8 @@ async def forwarding_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     token = get_or_create_inbox_token(db_user['id'])
     address = f"u{token}@{inbox_domain}"
 
-    await update.message.reply_text(
+    await context.bot.send_message(
+        chat_id,
         f"📮 **Your private forwarding address**\n\n"
         f"`{address}`\n"
         f"_(tap to copy)_\n\n"
@@ -1168,10 +1177,16 @@ async def handle_gmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     accounts = get_gmail_accounts(db_user['id'])
     
     keyboard = []
-    text = "🔗 **Connected Gmail Accounts**\n──────────────────\n\n"
-    
+    text = "🔗 **Email Tracking**\n──────────────────\n\n"
+
     if not accounts:
-        text += "No accounts connected yet.\nConnect an account to automatically track your job applications!"
+        text += (
+            "Track your applications automatically — I'll read the job emails you send me "
+            "and update your pipeline.\n\n"
+            "**📮 Forward job emails** _(recommended)_\n"
+            "You get a private address and forward job mail to it. I never touch your inbox, "
+            "and it takes one setup in Gmail.\n"
+        )
     else:
         text += "Select ❌ to remove an account.\n\n"
         for acc in accounts:
@@ -1190,9 +1205,17 @@ async def handle_gmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("📂 All Time", callback_data="sync_gmail:0")
         ])
         
-    url = f"{WEBHOOK_URL}/auth/gmail?user_id={db_user['id']}"
-    keyboard.append([InlineKeyboardButton("➕ Add Gmail Account", url=url)])
-    
+    # Forwarding first: it works for everyone, needs no Google review, and never
+    # asks for access to the user's mailbox.
+    if os.getenv("INBOX_DOMAIN"):
+        keyboard.append([InlineKeyboardButton("📮 Forward job emails to me", callback_data="show_forwarding")])
+
+    # Only offer the OAuth route when it's actually configured — otherwise the
+    # button leads to a broken page, which reads as the bot being broken.
+    if os.getenv("GOOGLE_CLIENT_ID") or os.getenv("GOOGLE_CLIENT_SECRET"):
+        url = f"{WEBHOOK_URL}/auth/gmail?user_id={db_user['id']}"
+        keyboard.append([InlineKeyboardButton("➕ Connect Gmail directly", url=url)])
+
     await update.message.reply_text(
         text,
         reply_markup=InlineKeyboardMarkup(keyboard),
