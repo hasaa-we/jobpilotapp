@@ -249,17 +249,28 @@ async def inbound_email(request: Request):
 
     result = await ingest_job_emails(db_user, job_records)
 
+    # Always say something. Silence after forwarding an email is indistinguishable
+    # from the pipeline being broken, and "already tracked" is a real outcome —
+    # a follow-up about a job you've already logged changes nothing.
     if result['added'] or result['updated']:
-        try:
-            await ptb_app.bot.send_message(
-                chat_id=db_user['telegram_id'],
-                text=(f"📥 **From your forwarded email**\n"
-                      f"➕ {result['added']} new · 🔄 {result['updated']} updated\n\n"
-                      f"{result['details']}"),
-                parse_mode="Markdown",
-            )
-        except Exception as e:
-            print(f"Could not notify {db_user.get('telegram_id')}: {e}")
+        message = (f"📥 **From your forwarded email**\n"
+                   f"➕ {result['added']} new · 🔄 {result['updated']} updated\n\n"
+                   f"{result['details']}")
+    elif result['found']:
+        message = (f"📥 **Already up to date**\n\n"
+                   f"I recognised {result['found']} job email(s), but nothing changed — "
+                   f"they're already tracked at the same stage or later.")
+    else:
+        message = ("📭 **Nothing to track**\n\n"
+                   "I got your email but couldn't identify a company and role in it, "
+                   "so I didn't add anything.")
+
+    try:
+        await ptb_app.bot.send_message(
+            chat_id=db_user['telegram_id'], text=message, parse_mode="Markdown"
+        )
+    except Exception as e:
+        print(f"Could not notify {db_user.get('telegram_id')}: {e}")
 
     return {"ok": True, "processed": len(records), **{k: result[k] for k in ('found', 'added', 'updated')}}
 
