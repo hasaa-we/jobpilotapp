@@ -10,13 +10,15 @@ services:
     name: jobpilot
     runtime: python
     plan: free
-    # 3.10 is close to end of life and google-api-core already warns about it.
-    pythonVersion: "3.11"
     buildCommand: pip install -r requirements.txt
     # Render assigns the port at runtime; binding a fixed 8000 would fail health checks.
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
+      # Render selects the Python version from this, not from a service field.
+      # 3.10 is close to end of life and google-api-core already warns about it.
+      - key: PYTHON_VERSION
+        value: "3.11.9"
       # Set every one of these in the Render dashboard. Never commit real values —
       # sync:false tells Render to prompt rather than read them from this file.
       - key: TELEGRAM_BOT_TOKEN
