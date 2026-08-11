@@ -123,6 +123,59 @@ ptb_app.add_handler(CallbackQueryHandler(show_jobs_more_callback, pattern="^show
 ptb_app.add_handler(CallbackQueryHandler(button_handler))
 ptb_app.add_error_handler(error_handler)
 
+# ─── Startup Configuration ───
+
+async def sync_bot_commands(commands):
+    """Pushes the command menu only when it differs from what Telegram already has."""
+    try:
+        current = await ptb_app.bot.get_my_commands()
+        if [(c.command, c.description) for c in current] == [(c.command, c.description) for c in commands]:
+            print("Bot commands already current — not re-sending")
+            return
+        await ptb_app.bot.set_my_commands(commands)
+        print("Bot commands updated")
+    except Exception as e:
+        # Never block startup on this; the bot works fine with a stale menu.
+        print(f"Could not sync bot commands: {e}")
+
+
+async def sync_webhook():
+    """
+    Registers the webhook only when it isn't already pointing here.
+
+    The secret token can't be read back from Telegram, so a changed secret is
+    detected indirectly: Telegram reports the 403 our own handler returns when the
+    header doesn't match, and seeing that means the registration needs replacing.
+    """
+    webhook_url = f"{WEBHOOK_URL}/webhook"
+    if not WEBHOOK_URL:
+        print("No WEBHOOK_URL/RENDER_EXTERNAL_URL set — skipping webhook registration")
+        return
+
+    try:
+        info = await ptb_app.bot.get_webhook_info()
+        rejected = "403" in (info.last_error_message or "")
+        if info.url == webhook_url and not rejected and not os.getenv("FORCE_WEBHOOK_SYNC"):
+            print(f"Webhook already set to {webhook_url} — not re-sending")
+            return
+        if rejected:
+            print("Telegram reported 403 from our webhook — re-registering with the current secret")
+    except Exception as e:
+        print(f"Could not read webhook info ({e}); registering anyway")
+
+    try:
+        # The secret token is echoed back by Telegram on every call, and is the only
+        # thing distinguishing a genuine update from a forged one.
+        await ptb_app.bot.set_webhook(
+            url=webhook_url,
+            allowed_updates=Update.ALL_TYPES,
+            secret_token=WEBHOOK_SECRET,
+        )
+        print(f"Webhook set to {webhook_url}")
+    except Exception as e:
+        print(f"Could not set webhook: {e}")
+
+
 # ─── FastAPI App ───
 
 @asynccontextmanager
@@ -142,19 +195,12 @@ async def lifespan(app: FastAPI):
         BotCommand("help", "What I can do"),
         BotCommand("cancel", "Cancel current action")
     ]
-    await ptb_app.bot.set_my_commands(commands)
-    
-    # Set webhook. The secret token is echoed back by Telegram on every call, which
-    # is the only thing distinguishing a genuine update from a forged one — without
-    # it, anyone who learns this URL can POST an update claiming any telegram_id and
-    # act as that user.
-    webhook_url = f"{WEBHOOK_URL}/webhook"
-    await ptb_app.bot.set_webhook(
-        url=webhook_url,
-        allowed_updates=Update.ALL_TYPES,
-        secret_token=WEBHOOK_SECRET,
-    )
-    print(f"Webhook set to {webhook_url}")
+    # Telegram rate-limits its bot-configuration endpoints, and this process
+    # cold-starts on every wake from idle — so calling them unconditionally fires
+    # them dozens of times a day for no reason. Both calls below are therefore
+    # made only when something has actually changed.
+    await sync_bot_commands(commands)
+    await sync_webhook()
     
     yield
     
