@@ -62,7 +62,8 @@ def _body_text(msg) -> str:
     return html_text if len(html_text) > len(text) else text
 
 
-def _html_to_text(html: str) -> str:
+def html_to_text(html: str) -> str:
+    """Flattens an HTML email body to readable text. Shared with gmail_services."""
     try:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(html or "", "html.parser")
@@ -71,6 +72,10 @@ def _html_to_text(html: str) -> str:
         return soup.get_text(separator="\n")
     except Exception:
         return re.sub(r"<[^>]+>", " ", html or "")
+
+
+# Kept as an alias so the private call sites in this module stay readable.
+_html_to_text = html_to_text
 
 
 def _attached_messages(msg) -> list:

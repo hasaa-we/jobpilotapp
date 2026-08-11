@@ -1,7 +1,10 @@
 import os
 import re
 import json
+import time
+import hmac
 import base64
+import hashlib
 import requests
 import urllib.parse
 from cryptography.fernet import Fernet
@@ -23,6 +26,42 @@ WEBHOOK_URL = (os.getenv("WEBHOOK_URL") or os.getenv("RENDER_EXTERNAL_URL") or "
 
 # Kept as a fallback for local development only.
 CLIENT_SECRETS_FILE = "client_secret.json"
+
+
+def _state_key() -> bytes:
+    """Signing key for OAuth state. FERNET_KEY already exists and is server-side only."""
+    return (os.getenv("FERNET_KEY") or os.getenv("TELEGRAM_BOT_TOKEN") or "jobpilot").encode()
+
+
+def make_oauth_state(user_id: str, ttl_seconds: int = 900) -> str:
+    """
+    Signs the user id into a short-lived OAuth `state`.
+
+    Passing the bare user id let anyone who reached the callback URL attach a mailbox
+    to an arbitrary account. Signing proves the flow was started by this server, and
+    the expiry keeps a leaked link from being replayed later.
+    """
+    expires = int(time.time()) + ttl_seconds
+    payload = f"{user_id}:{expires}"
+    signature = hmac.new(_state_key(), payload.encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{payload}:{signature}"
+
+
+def verify_oauth_state(state: str):
+    """Returns the user id if the state is authentic and unexpired, else None."""
+    try:
+        user_id, expires, signature = (state or "").rsplit(":", 2)
+    except ValueError:
+        return None
+
+    expected = hmac.new(
+        _state_key(), f"{user_id}:{expires}".encode(), hashlib.sha256
+    ).hexdigest()[:32]
+    if not hmac.compare_digest(signature, expected):
+        return None
+    if int(expires) < int(time.time()):
+        return None
+    return user_id
 
 
 def get_client_credentials():
@@ -85,7 +124,7 @@ def get_auth_url(user_id: str) -> str:
             "scope": " ".join(SCOPES),
             "access_type": "offline",
             "prompt": "consent",
-            "state": user_id
+            "state": make_oauth_state(user_id)
         }
         url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
         return url
@@ -216,15 +255,8 @@ def _decode(part: dict) -> str:
 
 def _html_to_text(html: str) -> str:
     """Flattens an HTML email body to readable text."""
-    try:
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html, "html.parser")
-        for tag in soup(["script", "style", "head"]):
-            tag.decompose()
-        text = soup.get_text(separator="\n")
-    except Exception:
-        text = re.sub(r"<[^>]+>", " ", html)
-    text = re.sub(r"[ \t]+", " ", text)
+    from email_ingest import html_to_text   # single implementation, shared
+    text = re.sub(r"[ \t]+", " ", html_to_text(html))
     return re.sub(r"\n\s*\n\s*\n+", "\n\n", text).strip()
 
 

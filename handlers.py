@@ -37,7 +37,7 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
  UPDATE_APP_STATUS,
  FIND_JOBS_KEYWORD, FIND_JOBS_LOCATION, FIND_JOBS_WORK_TYPE,
  FIND_JOBS_JOB_TYPE, FIND_JOBS_DATE_POSTED, FIND_JOBS_EXPERIENCE,
- FIND_JOBS_RESULT_COUNT, FIND_JOBS_REVIEW) = range(16)
+ FIND_JOBS_REVIEW) = range(15)
 
 # ─── Markdown Safety ───
 
@@ -462,46 +462,6 @@ FORWARDING_FILTER_QUERY = (
     'OR from:smartrecruiters.com OR from:workable.com OR from:linkedin.com'
 )
 
-# ─── Limit Checks ───
-
-def check_free_limit(user, feature: str) -> bool:
-    """
-    Returns True if the user has reached their free limit.
-
-    Paywall currently disabled — every feature is open to everyone. The original
-    thresholds are kept below so billing can be switched back on by deleting the
-    early return; the call sites and UPGRADE_TEXT are untouched.
-    """
-    return False
-
-    if user.get("plan") in ("pro", "premium"):
-        return False
-    if feature == "apps" and user.get("free_apps_count", 0) >= 5:
-        return True
-    if feature == "resume" and user.get("free_resume_used"):
-        return True
-    if feature == "interview" and user.get("free_interview_used"):
-        return True
-    return False
-
-UPGRADE_TEXT = """🔒 You've reached your free plan limit.
-
-**JobPilot Pro** — $9.99/mo
-✅ Unlimited application tracking
-✅ AI Resume tailoring for every job
-✅ AI Cover letter generation
-✅ Unlimited interview prep
-✅ Follow-up engine
-✅ Weekly reports
-
-**JobPilot Premium** — $19.99/mo
-✅ Everything in Pro
-✅ AI Job Finder (daily matches)
-✅ ATS Optimizer
-✅ Salary Intelligence
-✅ Skills Gap Analyzer
-✅ Networking Engine"""
-
 # ─── /start Command ───
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -671,9 +631,6 @@ async def track_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user, _ = get_or_create_user(user.id, user.username)
     
-    if check_free_limit(db_user, "apps"):
-        await update.message.reply_text(UPGRADE_TEXT)
-        return ConversationHandler.END
     
     await update.message.reply_text("🏢 What **company** did you apply to?")
     return TRACK_COMPANY
@@ -773,9 +730,6 @@ async def tailor_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user, _ = get_or_create_user(user.id, user.username)
     
-    if check_free_limit(db_user, "resume"):
-        await update.message.reply_text(UPGRADE_TEXT)
-        return ConversationHandler.END
     
     if not db_user.get("resume_text"):
         await update.message.reply_text("⚠️ You haven't uploaded your resume yet. Use /start to set it up.")
@@ -843,9 +797,6 @@ async def interview_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user, _ = get_or_create_user(user.id, user.username)
     
-    if check_free_limit(db_user, "interview"):
-        await update.message.reply_text(UPGRADE_TEXT)
-        return ConversationHandler.END
     
     await update.message.reply_text("🏢 What **company** is the interview at?")
     return INTERVIEW_COMPANY
@@ -946,9 +897,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user, _ = get_or_create_user(user.id, user.username)
     stats = get_user_stats(db_user['id'])
-    
-    plan_display = db_user.get("plan", "free").title()
-    
+
     bar_applied = "█" * min(stats['applied'], 20)
     bar_interview = "🟢" * stats['interview']
     bar_offer = "🎉" * stats['offer']
@@ -966,9 +915,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ❌ Rejected: {stats['rejected']} {bar_rejected}
 👻 Ghosted: {stats['ghosted']}
 
-📊 **Response Rate**: {stats['response_rate']}%
-💎 **Plan**: {plan_display}"""
-    
+📊 **Response Rate**: {stats['response_rate']}%"""
+
     await update.message.reply_text(text)
 
 # ─── Help Command ───
@@ -978,18 +926,22 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ──────────────────
 
 /start — Set up your profile
-/track — Log a new application
-/apps — View your pipeline
-/resume — Tailor resume for a job
+/track — Log an application manually
+/forwarding — Auto-track jobs from your email
+/resume — Tailor your CV for a job
 /interview — Prep for an interview
 /followups — Check pending follow-ups
 /stats — Your dashboard
+/cancel — Stop what you're doing
 /help — This menu
 
+**Buttons at the bottom:**
+📄 My CV · 📊 My Apps · 📈 Stats · 🔍 Find Jobs · 🔗 Manage Accounts
+
 **Quick Tips:**
-• Paste a job description → Get a tailored resume
-• Track every application → Never lose track
-• Prep before interviews → Land more offers"""
+• Forward a job email → I track it automatically
+• Paste a job description → Get a tailored CV
+• Search LinkedIn → See how well each job matches you"""
     await update.message.reply_text(text)
 
 # ─── Cancel ───
@@ -1882,9 +1834,6 @@ async def track_job_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user = update.effective_user
     db_user, _ = get_or_create_user(user.id, user.username)
 
-    if check_free_limit(db_user, "apps"):
-        await context.bot.send_message(chat_id, UPGRADE_TEXT)
-        return
 
     company = job.get('company') or "Unknown Company"
     role = job.get('title') or "Unknown Role"

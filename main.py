@@ -1,5 +1,7 @@
 import os
+import hmac
 import asyncio
+import hashlib
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, HTTPException
@@ -9,7 +11,9 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from dotenv import load_dotenv
 
 from database import update_user_profile, add_gmail_account, get_user_by_inbox_token
-from gmail_services import get_auth_url, exchange_code_for_token, encrypt_token
+from gmail_services import (
+    get_auth_url, exchange_code_for_token, encrypt_token, verify_oauth_state
+)
 from email_ingest import parse_raw_email, address_token, detect_forwarding_confirmation
 
 from handlers import (
@@ -44,6 +48,13 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 # points at the right host without hardcoding it. An explicit WEBHOOK_URL still
 # wins, which is what a custom domain in front of the app needs.
 WEBHOOK_URL = (os.getenv("WEBHOOK_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
+
+# Shared with Telegram so forged updates can be rejected. Derived from the bot token
+# when unset, which keeps existing deployments working without a new env var while
+# staying unguessable to anyone who doesn't already control the bot.
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET") or hashlib.sha256(
+    f"tg-webhook:{TELEGRAM_BOT_TOKEN}".encode()
+).hexdigest()[:48]
 
 # ─── Build PTB Application ───
 ptb_app = Application.builder().token(TELEGRAM_BOT_TOKEN).read_timeout(60).write_timeout(60).build()
@@ -137,9 +148,16 @@ async def lifespan(app: FastAPI):
     ]
     await ptb_app.bot.set_my_commands(commands)
     
-    # Set webhook
+    # Set webhook. The secret token is echoed back by Telegram on every call, which
+    # is the only thing distinguishing a genuine update from a forged one — without
+    # it, anyone who learns this URL can POST an update claiming any telegram_id and
+    # act as that user.
     webhook_url = f"{WEBHOOK_URL}/webhook"
-    await ptb_app.bot.set_webhook(url=webhook_url, allowed_updates=Update.ALL_TYPES)
+    await ptb_app.bot.set_webhook(
+        url=webhook_url,
+        allowed_updates=Update.ALL_TYPES,
+        secret_token=WEBHOOK_SECRET,
+    )
     print(f"Webhook set to {webhook_url}")
     
     yield
@@ -152,6 +170,11 @@ app = FastAPI(lifespan=lifespan)
 
 @app.post("/webhook")
 async def webhook(request: Request):
+    if not hmac.compare_digest(
+        request.headers.get("x-telegram-bot-api-secret-token", ""), WEBHOOK_SECRET
+    ):
+        raise HTTPException(status_code=403, detail="forbidden")
+
     data = await request.json()
     update = Update.de_json(data, ptb_app.bot)
     # Process in background to avoid webhook timeouts
@@ -169,7 +192,13 @@ async def auth_gmail(user_id: str):
 @app.get("/auth/gmail/callback")
 async def auth_gmail_callback(state: str, code: str):
     """Handles Google OAuth callback and saves token."""
-    user_id = state
+    # `state` used to be the bare user id, so anyone could complete this callback
+    # for any account — attaching their mailbox to someone else's profile, or a
+    # victim's mailbox to their own. It is now signed and time-limited.
+    user_id = verify_oauth_state(state)
+    if not user_id:
+        return {"error": "This link has expired or is invalid. Please start again from the bot."}
+
     token_data = exchange_code_for_token(code)
     if token_data and token_data.get('email_address'):
         encrypted = encrypt_token(token_data)
@@ -187,7 +216,9 @@ async def inbound_email(request: Request):
     and "forward as attachment" carrying a whole backfill.
     """
     secret = os.getenv("INBOUND_SECRET")
-    if not secret or request.headers.get("x-inbound-secret") != secret:
+    if not secret or not hmac.compare_digest(
+        request.headers.get("x-inbound-secret", ""), secret
+    ):
         # Anyone who can post here can write applications into someone's account.
         raise HTTPException(status_code=401, detail="unauthorized")
 

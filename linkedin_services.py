@@ -199,11 +199,6 @@ def resolve_location(location: str):
     return result
 
 
-def normalize_location(location: str) -> str:
-    """Canonical LinkedIn display name for a location (no geoId)."""
-    return resolve_location(location)[0]
-
-
 def _as_codes(value) -> list:
     """Accepts None, 'F', 'F,C' or ['F', 'C'] and returns a clean list of codes."""
     if not value:
@@ -505,28 +500,6 @@ def _detect_workplace_type(soup, description: str):
     return None
 
 
-def fetch_job_description(job_url: str) -> str:
-    """Description only — kept for callers that don't need the criteria block."""
-    return fetch_job_details(job_url).get("description", "")
-
-
-def enrich_jobs(jobs: list, max_workers: int = 8) -> list:
-    """
-    Fills in description + LinkedIn criteria for each job, in parallel.
-
-    LinkedIn throttles this endpoint to roughly 3 requests/second no matter how
-    many workers are used, so 8 is simply the point past which extra threads only
-    add contention. Budget about a second per three jobs.
-    """
-    todo = [j for j in jobs if not j.get("_enriched")]
-    if not todo:
-        return jobs
-
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        list(pool.map(_enrich_one, todo))
-    return jobs
-
-
 def _enrich_one(job: dict) -> dict:
     """Adds a posting's description and LinkedIn criteria to it, once."""
     if job.get("_enriched"):
@@ -650,13 +623,3 @@ def apply_linkedin_filters(jobs: list, work_type=None, job_type=None, experience
     return kept + unverified, stats
 
 
-def filter_hard_qualifications(jobs: list, keywords: str, job_type: str = None,
-                               experience_level: str = None, work_type: str = None) -> list:
-    """
-    Deprecated — kept so older call sites keep working.
-
-    This used to drop jobs by guessing seniority from words in the title, which is
-    why bot results diverged from LinkedIn's: LinkedIn filters on a posting's
-    declared criteria, not its title. Use apply_linkedin_filters() instead.
-    """
-    return jobs
