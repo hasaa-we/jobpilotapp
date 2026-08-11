@@ -30,13 +30,13 @@ from gmail_services import decrypt_token, fetch_recent_job_emails
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 # ─── Conversation States ───
-(ONBOARDING_RESUME, ONBOARDING_ROLE,
+(ONBOARDING_RESUME,
  TRACK_COMPANY, TRACK_ROLE,
  RESUME_JOB_DESC,
  UPDATE_APP_STATUS,
  FIND_JOBS_KEYWORD, FIND_JOBS_LOCATION, FIND_JOBS_WORK_TYPE,
  FIND_JOBS_JOB_TYPE, FIND_JOBS_DATE_POSTED, FIND_JOBS_EXPERIENCE,
- FIND_JOBS_REVIEW) = range(13)
+ FIND_JOBS_REVIEW) = range(12)
 
 # ─── Markdown Safety ───
 
@@ -535,51 +535,16 @@ async def forwarding_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     token = get_or_create_inbox_token(db_user['id'])
     address = f"u{token}@{inbox_domain}"
 
-    # Manual forwarding leads, because it is the only method a phone-only user can
-    # actually complete — Gmail serves its mobile site no matter what, and that site
-    # has no forwarding or filter settings at all. Presenting the automatic setup
-    # first sent people into a dead end and left them thinking the bot was broken.
     await context.bot.send_message(
         chat_id,
-        f"📮 **Your private forwarding address**\n\n"
-        f"`{address}`\n"
-        f"_(tap to copy)_\n\n"
-        f"Send any job email here and I'll track it — the company, the role, and whether "
-        f"it's an interview, an offer or a rejection. I never get access to your inbox.\n\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"✅ **Works right now, on your phone**\n\n"
-        f"Open a job email in Gmail → tap **⋮** → **Forward** → send it to the address above.\n\n"
-        f"That's a completely normal way to use me — it does everything the automatic "
-        f"setup does, you just tap forward yourself.\n\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"⚡ **Want it fully automatic?**\n\n"
-        f"Gmail can forward job emails to me on its own, so you never have to think "
-        f"about it. It's a one-time setup, but **Gmail only shows those settings on a "
-        f"computer**.\n\n"
-        f"Tap below for the steps.\n\n"
-        f"⚠️ Keep this address private — anyone who has it can add applications "
-        f"to your account.",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⚡ Set up automatic forwarding", callback_data="forwarding_auto")]
-        ]),
+        forwarding_setup_text(address),
         parse_mode="Markdown",
     )
 
 
-async def forwarding_auto_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """The full automatic-forwarding walkthrough, kept out of the main message."""
-    query = update.callback_query
-    await query.answer()
-
-    user = update.effective_user
-    db_user, _ = get_or_create_user(user.id, user.username)
-    inbox_domain = os.getenv("INBOX_DOMAIN")
-    if not inbox_domain:
-        return
-    address = f"u{get_or_create_inbox_token(db_user['id'])}@{inbox_domain}"
-
-    await context.bot.send_message(
-        update.effective_chat.id,
+def forwarding_setup_text(address: str) -> str:
+    """The whole forwarding guide, in one message."""
+    return (
         f"⚡ **Automatic forwarding setup**\n\n"
         f"**You need a computer for this.** Gmail hides forwarding and filter settings "
         f"on phones — even with *Desktop site* switched on, it usually still serves the "
@@ -611,9 +576,9 @@ async def forwarding_auto_callback(update: Update, context: ContextTypes.DEFAULT
         f"📚 **Add your past applications**\n\n"
         f"Filters only affect new mail. To bring in old emails: on the Gmail website "
         f"search your job emails, select them, then **⋮ → Forward as attachment** to "
-        f"your address. Up to 50 at a time.",
-        parse_mode="Markdown",
+        f"your address. Up to 50 at a time."
     )
+
 
 # A deliberately broad filter. Over-forwarding is cheap because parse_job_email
 # discards anything that isn't a job email, whereas an email the filter misses is
@@ -644,8 +609,15 @@ First I need your CV, so I know what to match jobs against.
 
 📎 **Send it as a PDF**
 or
-✍️ **Paste the text into this chat**"""
-        await update.message.reply_text(welcome)
+✍️ **Paste the text into this chat**
+
+_You can add it later — everything except job matching works without it._"""
+        await update.message.reply_text(
+            welcome,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⏭️ Upload later", callback_data="skip_cv")]
+            ]),
+        )
         return ONBOARDING_RESUME
     else:
         desc = f"""🎯 **JobPilot** — welcome back, {user.first_name}!
@@ -741,7 +713,7 @@ async def onboarding_resume_pdf(update: Update, context: ContextTypes.DEFAULT_TY
             "(e.g., \"Frontend Developer\", \"Marketing Manager\")"
         )
     
-    return ONBOARDING_ROLE
+    return await finish_onboarding(update, context)
 
 async def onboarding_resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles pasted text resume during onboarding."""
@@ -774,30 +746,57 @@ async def onboarding_resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "(e.g., \"Frontend Developer\", \"Marketing Manager\")"
         )
     
-    return ONBOARDING_ROLE
+    return await finish_onboarding(update, context)
 
-async def onboarding_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    target_role = update.message.text
-    resume_text = context.user_data.get('resume_text', '')
-    
+async def finish_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Saves the CV and drops the user straight onto the main menu.
+
+    There used to be a "what's your target job title?" step here. It's gone: the
+    job search asks for a role every time anyway, so answering it up front bought
+    nothing and stood between the user and the working product.
+    """
     user = update.effective_user
     db_user, _ = get_or_create_user(user.id, user.username)
-    
-    update_user_profile(db_user['id'],
-        resume_text=resume_text,
-        target_role=target_role,
-        onboarding_complete=True
-    )
-    
-    await update.message.reply_text(
-        f"✅ **Setup Complete!**\n\n"
-        f"🎯 Target: {target_role}\n"
-        f"📄 Resume: Saved\n\n"
-        f"You're ready to hunt.\n"
-        f"Use the buttons below or just text me naturally.",
-        reply_markup=get_main_keyboard(db_user)
+    resume_text = context.user_data.get('resume_text', '')
+
+    if resume_text:
+        update_user_profile(db_user['id'], resume_text=resume_text, onboarding_complete=True)
+
+    await update.effective_message.reply_text(
+        "✅ **You're set up.**\n\n"
+        "📄 CV saved — I'll score every job against it.\n\n"
+        "Tap **🔍 Find Jobs** to search LinkedIn, or **📧 Email Tracking** to have your "
+        "applications tracked from your inbox automatically.",
+        reply_markup=get_main_keyboard(db_user),
+        parse_mode="Markdown",
     )
     return ConversationHandler.END
+
+
+async def skip_cv_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """'Upload later' — go straight to the menu without a CV."""
+    query = update.callback_query
+    await query.answer()
+
+    user = update.effective_user
+    db_user, _ = get_or_create_user(user.id, user.username)
+
+    await query.edit_message_text(
+        "👍 No problem — you can add your CV any time from **📄 My CV**.\n\n"
+        "_Without it I can still find and track jobs, but I can't score how well "
+        "they match you._",
+        parse_mode="Markdown",
+    )
+    await context.bot.send_message(
+        update.effective_chat.id,
+        "Tap **🔍 Find Jobs** to search LinkedIn, or **📧 Email Tracking** to track "
+        "applications from your inbox.",
+        reply_markup=get_main_keyboard(db_user),
+        parse_mode="Markdown",
+    )
+    return ConversationHandler.END
+
 
 # ─── Track Application ───
 

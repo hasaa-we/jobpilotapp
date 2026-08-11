@@ -18,13 +18,13 @@ from email_ingest import parse_raw_email, address_token, detect_forwarding_confi
 
 from handlers import (
     start_command, input_router,
-    onboarding_resume, onboarding_resume_pdf, onboarding_role,
+    onboarding_resume, onboarding_resume_pdf, skip_cv_callback,
     sync_all_gmails_callback, sync_gmail_period_callback, remove_gmail_callback,
     track_start, track_company, track_role,
     tailor_start, tailor_process,
     follow_ups, stats_command, help_command, cancel,
     button_handler,
-    ONBOARDING_RESUME, ONBOARDING_ROLE,
+    ONBOARDING_RESUME,
     TRACK_COMPANY, TRACK_ROLE,
     RESUME_JOB_DESC,
     FIND_JOBS_KEYWORD, FIND_JOBS_LOCATION, FIND_JOBS_WORK_TYPE,
@@ -36,7 +36,7 @@ from handlers import (
     find_jobs_experience_handler, find_jobs_go_handler, find_jobs_relax_callback,
     cv_callback_handler, job_analysis_callback, track_job_callback,
     show_jobs_count_callback, show_jobs_more_callback,
-    ingest_job_emails, forwarding_command, forwarding_callback, forwarding_auto_callback,
+    ingest_job_emails, forwarding_command, forwarding_callback,
     interview_prep_callback
 )
 
@@ -77,10 +77,10 @@ conv_handler = ConversationHandler(
     ],
     states={
         ONBOARDING_RESUME: [
+            CallbackQueryHandler(skip_cv_callback, pattern="^skip_cv$"),
             MessageHandler(filters.Document.PDF, onboarding_resume_pdf),
             MessageHandler(filters.TEXT & ~filters.COMMAND, onboarding_resume)
         ],
-        ONBOARDING_ROLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, onboarding_role)],
         TRACK_COMPANY: [MessageHandler(filters.TEXT & ~filters.COMMAND, track_company)],
         TRACK_ROLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, track_role)],
         RESUME_JOB_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, tailor_process)],
@@ -117,7 +117,6 @@ ptb_app.add_handler(CallbackQueryHandler(job_analysis_callback, pattern="^job_an
 ptb_app.add_handler(CallbackQueryHandler(track_job_callback, pattern="^track_job:"))
 ptb_app.add_handler(CallbackQueryHandler(find_jobs_relax_callback, pattern="^fj_relax$"))
 ptb_app.add_handler(CallbackQueryHandler(forwarding_callback, pattern="^show_forwarding$"))
-ptb_app.add_handler(CallbackQueryHandler(forwarding_auto_callback, pattern="^forwarding_auto$"))
 ptb_app.add_handler(CallbackQueryHandler(interview_prep_callback, pattern="^prep(_more)?:"))
 ptb_app.add_handler(CallbackQueryHandler(show_jobs_count_callback, pattern="^show_jobs:\d+$"))
 ptb_app.add_handler(CallbackQueryHandler(show_jobs_more_callback, pattern="^show_jobs_more:"))
