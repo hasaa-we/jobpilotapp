@@ -16,7 +16,7 @@ from database import (
     delete_user_cv, get_or_create_inbox_token
 )
 from ai_services import (
-    score_resume, tailor_resume, generate_cover_letter,
+    tailor_resume, generate_cover_letter,
     draft_follow_up, generate_interview_questions,
     classify_user_intent, parse_job_email, parse_job_search_query
 )
@@ -689,30 +689,6 @@ async def onboarding_resume_pdf(update: Update, context: ContextTypes.DEFAULT_TY
         await msg.edit_text("⚠️ Error reading PDF. Please paste your resume as text instead.")
         return ONBOARDING_RESUME
     
-    # Now score it
-    try:
-        score_result = await score_resume(resume_text)
-        score = score_result.get("score", 0)
-        verdict = score_result.get("verdict", "")
-        fixes = score_result.get("fixes", [])
-        
-        fixes_text = "\n".join([f"  • {fix}" for fix in fixes])
-        bar = "█" * (score // 10) + "░" * (10 - score // 10)
-        
-        await update.message.reply_text(
-            f"📊 **Resume Score: {score}/100**\n{bar}\n\n"
-            f"💬 {verdict}\n\n"
-            f"🔧 **Top Fixes:**\n{fixes_text}\n\n"
-            f"Now, what's your **target job title**?\n"
-            f"(e.g., \"Frontend Developer\", \"Marketing Manager\")"
-        )
-    except Exception as e:
-        await update.message.reply_text(
-            "✅ Resume saved!\n\n"
-            "What's your **target job title**?\n"
-            "(e.g., \"Frontend Developer\", \"Marketing Manager\")"
-        )
-    
     return await finish_onboarding(update, context)
 
 async def onboarding_resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -720,31 +696,7 @@ async def onboarding_resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
     resume_text = update.message.text
     context.user_data['resume_text'] = resume_text
     
-    msg = await update.message.reply_text("📝 Analyzing your resume...")
-    
-    try:
-        score_result = await score_resume(resume_text)
-        score = score_result.get("score", 0)
-        verdict = score_result.get("verdict", "")
-        fixes = score_result.get("fixes", [])
-        
-        fixes_text = "\n".join([f"  • {fix}" for fix in fixes])
-        
-        bar = "█" * (score // 10) + "░" * (10 - score // 10)
-        
-        await msg.edit_text(
-            f"📊 **Resume Score: {score}/100**\n{bar}\n\n"
-            f"💬 {verdict}\n\n"
-            f"🔧 **Top Fixes:**\n{fixes_text}\n\n"
-            f"Now, what's your **target job title**?\n"
-            f"(e.g., \"Frontend Developer\", \"Marketing Manager\", \"Data Analyst\")"
-        )
-    except Exception as e:
-        await msg.edit_text(
-            "✅ Resume saved!\n\n"
-            "What's your **target job title**?\n"
-            "(e.g., \"Frontend Developer\", \"Marketing Manager\")"
-        )
+    await update.message.reply_text("📝 Saving your CV...")
     
     return await finish_onboarding(update, context)
 

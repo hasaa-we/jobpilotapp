@@ -7,39 +7,6 @@ load_dotenv()
 
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# ─── Resume Scorer ───
-
-async def score_resume(resume_text: str) -> dict:
-    """Scores a resume 1-100 and gives specific fixes."""
-    prompt = f"""
-You are an expert resume reviewer who has hired 10,000+ people.
-
-Score this resume from 1 to 100 and provide exactly 5 specific, actionable fixes.
-
-Return ONLY this JSON format:
-{{
-  "score": 72,
-  "verdict": "Good foundation but needs stronger impact metrics",
-  "fixes": [
-    "Add quantified achievements (e.g., 'Increased revenue by 30%')",
-    "Remove the objective statement — use a professional summary instead",
-    "Add specific technologies to each role",
-    "Remove graduation date to avoid age bias",
-    "Add a 'Key Achievements' section at the top"
-  ]
-}}
-
-Resume:
-{resume_text}
-"""
-    response = await client.chat.completions.create(
-        model="gpt-4o",
-        response_format={"type": "json_object"},
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3
-    )
-    return json.loads(response.choices[0].message.content)
-
 
 # ─── Resume Tailor ───
 
