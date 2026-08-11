@@ -136,14 +136,15 @@ async def lifespan(app: FastAPI):
     
     # Set bot commands for the / menu
     commands = [
-        BotCommand("start", "Set up your profile"),
-        BotCommand("track", "Log a new application"),
-        BotCommand("resume", "Tailor resume for a job"),
+        # /track and /followups are deliberately absent — both are reachable from
+        # the keyboard, and a shorter menu is easier to scan. Their handlers still
+        # work for anyone who types them.
+        BotCommand("start", "Start here"),
+        BotCommand("forwarding", "Auto-track jobs from your email"),
+        BotCommand("resume", "Tailor your CV for a job"),
         BotCommand("interview", "Prep for an interview"),
-        BotCommand("followups", "Check pending follow-ups"),
-        BotCommand("forwarding", "Auto-track jobs by forwarding email"),
         BotCommand("stats", "Your dashboard"),
-        BotCommand("help", "Available commands"),
+        BotCommand("help", "What I can do"),
         BotCommand("cancel", "Cancel current action")
     ]
     await ptb_app.bot.set_my_commands(commands)

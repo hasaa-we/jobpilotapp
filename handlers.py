@@ -279,7 +279,7 @@ def get_main_keyboard(user_dict=None):
     keyboard = [
         [KeyboardButton("📄 My CV"), KeyboardButton("📊 My Apps")],
         [KeyboardButton("📈 Stats"), KeyboardButton("🔍 Find Jobs")],
-        [KeyboardButton("🔗 Manage Accounts")]
+        [KeyboardButton("📧 Email Tracking")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
@@ -392,7 +392,7 @@ async def ingest_job_emails(db_user: dict, emails: list) -> dict:
     return outcome
 
 async def forwarding_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Same instructions, reached from the Manage Accounts button."""
+    """Same instructions, reached from the Email Tracking button."""
     query = update.callback_query
     await query.answer()
     await forwarding_command(update, context)
@@ -470,30 +470,40 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if created or not db_user.get("resume_text"):
         welcome = f"""🎯 Welcome to **JobPilot**, {user.first_name}!
-        
-I'm your AI-powered job hunting assistant.
 
-Let's get started right away! Please upload your CV/Resume.
+I do three things:
+• Find jobs on LinkedIn and score them against your CV
+• Track your applications automatically from your email
+• Tailor your CV and prep you for interviews
 
-📎 **Send your CV as a PDF file**
+First I need your CV, so I know what to match jobs against.
+
+📎 **Send it as a PDF**
 or
-✍️ **Paste your CV text directly into the chat**"""
+✍️ **Paste the text into this chat**"""
         await update.message.reply_text(welcome)
         return ONBOARDING_RESUME
     else:
-        desc = f"""🎯 **Welcome to CareerCopilot, {user.first_name}!**
+        desc = f"""🎯 **JobPilot** — welcome back, {user.first_name}!
 
-Finding a job in today's market is a full-time job in itself. CareerCopilot is your personal AI-powered career assistant designed to automate the most tedious parts of job hunting. By scanning the job market, scoring opportunities against your specific skills, and tracking your application pipelines, CareerCopilot ensures you stay completely organized and never miss a perfect role.
+**🔍 Find Jobs**
+Search LinkedIn by role, location and filters. I check every posting against your CV requirement by requirement and tell you what you match and what you're missing — so you only read the ones worth your time.
 
-**Here is a guide to using your tools:**
+**📧 Email Tracking**
+Forward your job emails to your private address and I log every application, interview invite and rejection by itself. No inbox access needed.
 
-🔍 **Find Jobs:** Tell the bot what role you want. It will pull the latest jobs from LinkedIn and instantly grade them against your CV so you focus only on the best matches.
-📊 **My Apps:** Your personal tracker. Save jobs you like, track applications, update statuses (Interviewing, Offered, Rejected), and never lose track of an opportunity.
-📈 **Stats:** View your personal analytics dashboard. See your application success rate and pipeline health over time.
-📄 **My CV:** View or update the master CV that the AI uses to grade jobs. Keeping this updated ensures the most accurate job recommendations.
-🔗 **Manage Accounts:** Link your external database accounts to ensure your data is synced and secure.
+**📊 My Apps**
+Your pipeline — where each application stands, and who needs a follow-up.
 
-Select an option below to begin!"""
+**📄 My CV**
+The CV I score jobs against. Keep it current and the matches stay accurate.
+
+**📈 Stats**
+Response rate and how your search is actually going.
+
+Also: send me a job description and I'll tailor your CV for it, or use /interview to prepare for one.
+
+Tap a button below to start."""
         await update.message.reply_text(
             desc,
             reply_markup=get_main_keyboard(db_user)
@@ -922,26 +932,28 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Help Command ───
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = """🎯 **JobPilot Commands**
+    text = """🎯 **What JobPilot can do**
 ──────────────────
 
-/start — Set up your profile
-/track — Log an application manually
-/forwarding — Auto-track jobs from your email
+**Use the buttons below the chat:**
+🔍 **Find Jobs** — search LinkedIn, scored against your CV
+📧 **Email Tracking** — auto-track applications from your email
+📊 **My Apps** — your application pipeline
+📄 **My CV** — the CV I match jobs against
+📈 **Stats** — response rate and progress
+
+**Commands:**
+/forwarding — Your private email address for auto-tracking
 /resume — Tailor your CV for a job
 /interview — Prep for an interview
-/followups — Check pending follow-ups
 /stats — Your dashboard
 /cancel — Stop what you're doing
 /help — This menu
 
-**Buttons at the bottom:**
-📄 My CV · 📊 My Apps · 📈 Stats · 🔍 Find Jobs · 🔗 Manage Accounts
-
-**Quick Tips:**
+**Shortcuts:**
 • Forward a job email → I track it automatically
-• Paste a job description → Get a tailored CV
-• Search LinkedIn → See how well each job matches you"""
+• Paste a job description → I tailor your CV for it
+• Just tell me what job you want → I'll search for it"""
     await update.message.reply_text(text)
 
 # ─── Cancel ───
@@ -1922,7 +1934,7 @@ async def input_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📈 Stats":
         await stats_command(update, context)
         return ConversationHandler.END
-    elif text == "🔗 Manage Accounts":
+    elif text == "📧 Email Tracking":
         await handle_gmail(update, context)
         return ConversationHandler.END
     elif text == "📄 My CV":
