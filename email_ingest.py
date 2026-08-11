@@ -182,6 +182,46 @@ def _is_meaningful(record: dict) -> bool:
     return bool((record.get("body") or "").strip()) or record.get("subject") != "No Subject"
 
 
+# Gmail will not forward anywhere until the destination address proves it wants the
+# mail, and it proves that by receiving a code. Since the bot owns that mailbox, the
+# code lands here rather than anywhere the user can read — so it has to be relayed,
+# or setup is impossible to complete.
+_CONFIRM_SENDER = "forwarding-noreply@google.com"
+_CONFIRM_CODE = re.compile(r"\(#(\d{6,})\)")
+_CONFIRM_CODE_BODY = re.compile(r"confirmation code[:\s]+(\d{6,})", re.I)
+_CONFIRM_LINK = re.compile(r"https://mail\.google\.com/\S+")
+
+
+def detect_forwarding_confirmation(record: dict):
+    """
+    Recognises Gmail's forwarding-confirmation email.
+
+    Returns {'code', 'link'} when this is one, else None.
+    """
+    sender = (record.get("sender_email") or "").lower()
+    subject = record.get("subject") or ""
+    body = record.get("body") or ""
+
+    is_confirmation = (
+        _CONFIRM_SENDER in sender
+        or "forwarding confirmation" in subject.lower()
+        or "verify" in subject.lower() and "forward" in subject.lower()
+    )
+    if not is_confirmation:
+        return None
+
+    match = _CONFIRM_CODE.search(subject) or _CONFIRM_CODE_BODY.search(body)
+    code = match.group(1) if match else None
+
+    link_match = _CONFIRM_LINK.search(body)
+    # Trailing punctuation from the surrounding sentence isn't part of the URL.
+    link = link_match.group(0).rstrip(").,;>'\"") if link_match else None
+
+    if not code and not link:
+        return None
+    return {"code": code, "link": link}
+
+
 def address_token(to_address: str) -> str:
     """
     Extracts the per-user token from the address the mail was sent to.

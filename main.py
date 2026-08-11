@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from database import update_user_profile, add_gmail_account, get_user_by_inbox_token
 from gmail_services import get_auth_url, exchange_code_for_token, encrypt_token
-from email_ingest import parse_raw_email, address_token
+from email_ingest import parse_raw_email, address_token, detect_forwarding_confirmation
 
 from handlers import (
     start_command, input_router,
@@ -206,7 +206,33 @@ async def inbound_email(request: Request):
     if not records:
         return {"ok": True, "ignored": "unreadable email"}
 
-    result = await ingest_job_emails(db_user, records)
+    # Gmail's forwarding confirmation is addressed here, not to the user, so relay it
+    # before classification — otherwise it looks like a non-job email and is dropped,
+    # leaving the user unable to finish setting up forwarding at all.
+    confirmations = []
+    job_records = []
+    for record in records:
+        found = detect_forwarding_confirmation(record)
+        (confirmations.append(found) if found else job_records.append(record))
+
+    for confirmation in confirmations:
+        message = "📬 **Gmail forwarding confirmation**\n\n"
+        if confirmation.get("code"):
+            message += f"Your confirmation code:\n\n`{confirmation['code']}`\n_(tap to copy)_\n\n"
+            message += "Paste it into Gmail → Settings → *Forwarding and POP/IMAP* → **Verify**.\n"
+        if confirmation.get("link"):
+            message += f"\nOr just open this link to confirm:\n{confirmation['link']}"
+        try:
+            await ptb_app.bot.send_message(
+                chat_id=db_user['telegram_id'], text=message, parse_mode="Markdown"
+            )
+        except Exception as e:
+            print(f"Could not relay confirmation to {db_user.get('telegram_id')}: {e}")
+
+    if not job_records:
+        return {"ok": True, "confirmations": len(confirmations)}
+
+    result = await ingest_job_emails(db_user, job_records)
 
     if result['added'] or result['updated']:
         try:
