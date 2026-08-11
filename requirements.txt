@@ -1,0 +1,14 @@
+python-telegram-bot[webhooks]
+fastapi
+uvicorn[standard]
+openai
+python-dotenv
+supabase
+stripe
+requests
+beautifulsoup4
+google-auth
+google-auth-oauthlib
+google-api-python-client
+PyPDF2
+pypdf

@@ -1,0 +1,42 @@
+# Render Blueprint for JobPilot.
+# Render > New > Blueprint, point it at this repo, and it reads this file.
+#
+# The bot is a long-running process holding a Telegram webhook and in-process
+# caches, so it runs as a web service — not a serverless function, which would
+# kill the background task that actually handles each Telegram update.
+
+services:
+  - type: web
+    name: jobpilot
+    runtime: python
+    plan: free
+    # 3.10 is close to end of life and google-api-core already warns about it.
+    pythonVersion: "3.11"
+    buildCommand: pip install -r requirements.txt
+    # Render assigns the port at runtime; binding a fixed 8000 would fail health checks.
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Set every one of these in the Render dashboard. Never commit real values —
+      # sync:false tells Render to prompt rather than read them from this file.
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: FERNET_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: INBOX_DOMAIN
+        sync: false
+      - key: INBOUND_SECRET
+        sync: false
+      # WEBHOOK_URL is deliberately omitted: main.py falls back to
+      # RENDER_EXTERNAL_URL, which Render fills in with this service's real URL.
+      # Set it explicitly only when a custom domain is in front of the app.

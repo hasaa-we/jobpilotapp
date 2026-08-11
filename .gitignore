@@ -1,0 +1,25 @@
+# Secrets — never commit these.
+# .env holds the Telegram token, OpenAI key, Supabase key and FERNET_KEY.
+# FERNET_KEY decrypts every stored Gmail token, so leaking it exposes user mailboxes.
+.env
+.env.local
+client_secret.json
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Local editor/agent settings — machine-specific, not part of the app
+.claude/settings.local.json
+
+# Tooling / OS
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+Thumbs.db
+*.log
