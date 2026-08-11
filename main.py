@@ -136,13 +136,11 @@ async def lifespan(app: FastAPI):
     
     # Set bot commands for the / menu
     commands = [
-        # /track and /followups are deliberately absent — both are reachable from
-        # the keyboard, and a shorter menu is easier to scan. Their handlers still
-        # work for anyone who types them.
+        # /track, /followups and /interview are deliberately absent — a shorter menu
+        # is easier to scan, and their handlers still work for anyone who types them.
         BotCommand("start", "Start here"),
         BotCommand("forwarding", "Auto-track jobs from your email"),
         BotCommand("resume", "Tailor your CV for a job"),
-        BotCommand("interview", "Prep for an interview"),
         BotCommand("stats", "Your dashboard"),
         BotCommand("help", "What I can do"),
         BotCommand("cancel", "Cancel current action")

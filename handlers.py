@@ -501,7 +501,7 @@ The CV I score jobs against. Keep it current and the matches stay accurate.
 **📈 Stats**
 Response rate and how your search is actually going.
 
-Also: send me a job description and I'll tailor your CV for it, or use /interview to prepare for one.
+Also: send me a job description and I'll tailor your CV for it.
 
 Tap a button below to start."""
         await update.message.reply_text(
@@ -945,7 +945,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 **Commands:**
 /forwarding — Your private email address for auto-tracking
 /resume — Tailor your CV for a job
-/interview — Prep for an interview
 /stats — Your dashboard
 /cancel — Stop what you're doing
 /help — This menu
