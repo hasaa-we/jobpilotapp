@@ -113,69 +113,6 @@ Job Description:
     return response.choices[0].message.content
 
 
-# ─── Interview Prep ───
-
-async def prepare_interview(company: str, role: str, resume_text: str = None, more_questions_flag: bool = False, job_description: str = None) -> dict:
-    """Generates company research + 20 predicted interview questions with tailored answers."""
-    resume_context = f"\nCandidate Resume:\n{resume_text}" if resume_text else ""
-    job_context = f"\nJob Description:\n{job_description}" if job_description else ""
-    
-    additional_context = ""
-    temperature = 0.5
-    if more_questions_flag:
-        temperature = 0.8
-        additional_context = "CRITICAL INSTRUCTION: The user has requested ADDITIONAL questions. You MUST generate 20 completely new, highly obscure, niche, and extremely difficult questions. DO NOT repeat standard questions like 'Tell me about yourself' or 'Strengths/Weaknesses' again. Go straight into advanced scenarios."
-        
-    prompt = f"""
-You are a world-class Executive Interview Coach preparing a candidate for a role as {role} at {company}.
-
-Part 1 — Company Research:
-Write a brief, sharp company briefing (5-6 sentences) covering:
-- What the company does and its core product/market
-- Recent strategic directions or tech stack they likely use
-- What they likely care about in this role
-
-Part 2 — Interview Questions (20 Questions):
-Generate exactly 20 HIGHLY PROFESSIONAL, REALISTIC interview questions broken down into logical categories (e.g., Part 1: Introduction, Part 2: Technical/Core Skills, Part 3: Problem Solving, Part 4: Behavioral/Teamwork, Part 5: Future & Culture).
-{additional_context}
-
-RULES FOR QUESTIONS:
-- Tailor the advice HEAVILY to the candidate's provided Resume. Point out exactly which past job, project, or experience they should talk about for specific questions (e.g., "Use your sweet shop experience" or "Talk about your university project").
-- Give highly actionable advice. Use phrases like "They want: Stay calm, Empathy, Investigate" or "Don't say: X. Instead say something like: Y".
-- Do NOT write full essay answers. Use short, punchy bullet points, contexts, and actionable tips just like a real interview coach would.
-
-Return ONLY this JSON format:
-{{
-  "company_briefing": "...",
-  "categories": [
-    {{
-      "name": "Part 1: Introduction (100%)",
-      "questions": [
-        {{
-          "question": "Tell me about yourself.",
-          "context": "This will almost certainly be the first question.",
-          "tips": [
-            "Mention your university degree",
-            "Highlight your recent project",
-            "Why you want this specific role"
-          ]
-        }}
-      ]
-    }}
-  ]
-}}
-{resume_context}
-{job_context}
-"""
-    response = await client.chat.completions.create(
-        model="gpt-4o",
-        response_format={"type": "json_object"},
-        messages=[{"role": "user", "content": prompt}],
-        temperature=temperature
-    )
-    return json.loads(response.choices[0].message.content)
-
-
 # ─── Follow-Up Email ───
 
 async def draft_follow_up(company: str, role: str, days_since: int) -> str:
@@ -203,47 +140,6 @@ Write ONLY the email body (no subject line needed).
         temperature=0.5
     )
     return response.choices[0].message.content
-
-
-# ─── Skills Gap Analysis ───
-
-async def analyze_skills_gap(resume_text: str, job_description: str) -> dict:
-    """Identifies missing skills and recommends resources."""
-    prompt = f"""
-Compare this resume against the job description.
-
-Identify:
-1. Skills the job REQUIRES that are MISSING from the resume
-2. Skills the candidate HAS that match the job
-3. For each missing skill, suggest ONE specific free resource (course, tutorial, or project) to learn it quickly
-
-Return ONLY this JSON:
-{{
-  "matching_skills": ["Python", "SQL"],
-  "missing_skills": [
-    {{
-      "skill": "AWS",
-      "importance": "high",
-      "resource": "AWS Cloud Practitioner — free on AWS Skill Builder",
-      "time_to_learn": "1 week"
-    }}
-  ],
-  "overall_readiness": 72
-}}
-
-Resume:
-{resume_text}
-
-Job Description:
-{job_description}
-"""
-    response = await client.chat.completions.create(
-        model="gpt-4o",
-        response_format={"type": "json_object"},
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3
-    )
-    return json.loads(response.choices[0].message.content)
 
 
 # ─── Job Matching ───
@@ -698,7 +594,7 @@ async def parse_job_search_query(user_query: str, default_location: str = "World
 async def classify_user_intent(text: str) -> str:
     """
     Classifies raw user text into one of the bot's core actions.
-    Returns one of: FIND_JOBS, TAILOR_RESUME, TRACK_APP, PREP_INTERVIEW, GENERAL_CHAT
+    Returns one of: FIND_JOBS, TAILOR_RESUME, TRACK_APP, GENERAL_CHAT
     """
     prompt = f"""
     You are an intelligent routing assistant for a job-hunting Telegram bot.
@@ -709,7 +605,6 @@ async def classify_user_intent(text: str) -> str:
     FIND_JOBS - if they are looking for jobs, e.g. "software engineer in london", "remote jobs", "find me work"
     TAILOR_RESUME - if they paste a job description or ask to tailor/write a resume/CV
     TRACK_APP - if they want to save or track a job application
-    PREP_INTERVIEW - if they want to practice or prepare for an interview
     GENERAL_CHAT - if it's just a general question or greeting
     
     Return ONLY the exact string, nothing else.
@@ -814,59 +709,5 @@ Return ONLY valid JSON:
     if result.get("is_job_email") and not result.get("company"):
         result["company"] = domain_company or sender_name or "Unknown Company"
     return result
-async def start_mock_interview(company: str, role: str, resume_text: str = None, job_description: str = None) -> str:
-    """Initializes the mock interview and returns the first question."""
-    resume_context = f"\nCandidate Resume:\n{resume_text}" if resume_text else ""
-    job_context = f"\nJob Description:\n{job_description}" if job_description else ""
-    
-    prompt = f"""
-You are a senior hiring manager at {company} conducting a live interview with a candidate for the role of {role}.
-You are friendly but professional. 
-Start the interview by introducing yourself briefly, and then ask your FIRST question.
-DO NOT provide the answer. Just ask the question and wait for the candidate to respond.
 
-Make the question highly relevant to their resume or the job description.
-{resume_context}
-{job_context}
-"""
-    response = await client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "system", "content": prompt}],
-        temperature=0.7
-    )
-    return response.choices[0].message.content
-
-async def evaluate_mock_answer(company: str, role: str, chat_history: list) -> dict:
-    """
-    Evaluates the user's last answer and returns feedback + the next question.
-    chat_history is a list of dicts: [{"role": "assistant"/"user", "content": "..."}]
-    """
-    system_prompt = f"""
-You are a senior hiring manager at {company} conducting a live interview with a candidate for the role of {role}.
-The candidate has just answered your previous question.
-
-Task:
-1. Evaluate their answer constructively. Point out exactly what they did well and what they missed (e.g. "Great use of the STAR method, but you forgot to mention the specific technologies you used.").
-2. Ask the NEXT question.
-
-If this is the 5th question they have answered, you should conclude the interview instead of asking another question, and give them a final overall score out of 100.
-
-Return ONLY this JSON format:
-{{
-  "feedback": "Your evaluation of their answer...",
-  "next_question": "The next question you want to ask (or null if the interview is over)",
-  "is_over": false // true if interview is concluded
-}}
-"""
-    
-    messages = [{"role": "system", "content": system_prompt}] + chat_history
-    
-    response = await client.chat.completions.create(
-        model="gpt-4o",
-        response_format={"type": "json_object"},
-        messages=messages,
-        temperature=0.7
-    )
-    import json
-    return json.loads(response.choices[0].message.content)
 

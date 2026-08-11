@@ -11,13 +11,13 @@ from database import (
     add_application, update_application_status, get_applications, get_application,
     delete_application,
     get_follow_up_candidates, mark_follow_up_sent,
-    save_generated_doc, save_interview_prep, get_user_stats,
+    save_generated_doc, get_user_stats,
     get_gmail_accounts, update_gmail_account_sync, remove_gmail_account,
     delete_user_cv, get_or_create_inbox_token
 )
 from ai_services import (
     score_resume, tailor_resume, generate_cover_letter,
-    prepare_interview, draft_follow_up, analyze_skills_gap,
+    draft_follow_up,
     classify_user_intent, parse_job_email, parse_job_search_query
 )
 import asyncio
@@ -33,11 +33,10 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 (ONBOARDING_RESUME, ONBOARDING_ROLE,
  TRACK_COMPANY, TRACK_ROLE,
  RESUME_JOB_DESC,
- INTERVIEW_COMPANY, INTERVIEW_ROLE,
  UPDATE_APP_STATUS,
  FIND_JOBS_KEYWORD, FIND_JOBS_LOCATION, FIND_JOBS_WORK_TYPE,
  FIND_JOBS_JOB_TYPE, FIND_JOBS_DATE_POSTED, FIND_JOBS_EXPERIENCE,
- FIND_JOBS_REVIEW) = range(15)
+ FIND_JOBS_REVIEW) = range(13)
 
 # ─── Markdown Safety ───
 
@@ -474,7 +473,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 I do three things:
 • Find jobs on LinkedIn and score them against your CV
 • Track your applications automatically from your email
-• Tailor your CV and prep you for interviews
+• Tailor your CV for any job you apply to
 
 First I need your CV, so I know what to match jobs against.
 
@@ -801,74 +800,6 @@ async def tailor_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return ConversationHandler.END
 
-# ─── Interview Prep ───
-
-async def interview_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    db_user, _ = get_or_create_user(user.id, user.username)
-    
-    
-    await update.message.reply_text("🏢 What **company** is the interview at?")
-    return INTERVIEW_COMPANY
-
-async def interview_company(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['interview_company'] = update.message.text
-    await update.message.reply_text("💼 What **role** is the interview for?")
-    return INTERVIEW_ROLE
-
-async def interview_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    company = context.user_data.get('interview_company')
-    role = update.message.text
-    
-    user = update.effective_user
-    db_user, _ = get_or_create_user(user.id, user.username)
-    
-    msg = await update.message.reply_text(f"🔍 Researching {company} and preparing your interview questions...\nThis takes about 30 seconds.")
-    
-    try:
-        resume_text = db_user.get("resume_text", "")
-        result = await prepare_interview(company, role, resume_text)
-        
-        briefing = result.get("company_briefing", "")
-        questions = result.get("questions", [])
-        
-        # Save to database
-        questions_text = ""
-        for i, q in enumerate(questions, 1):
-            questions_text += f"\n**Q{i}. {q['question']}**\n"
-            questions_text += f"Type: {q.get('type', 'general').title()}\n"
-            questions_text += f"💡 {q['suggested_answer']}\n"
-        
-        save_interview_prep(db_user['id'], company, role, briefing, questions_text)
-        
-        # Mark free interview as used
-        if db_user.get("plan") == "free":
-            update_user_profile(db_user['id'], free_interview_used=True)
-        
-        await msg.edit_text(
-            f"🏢 **{company} — Interview Brief**\n──────────────────\n\n{briefing}"
-        )
-        
-        # Send questions in chunks to avoid message length limits
-        chunk = ""
-        for i, q in enumerate(questions, 1):
-            entry = f"\n**Q{i}. {q['question']}**\n💡 {q['suggested_answer']}\n"
-            if len(chunk) + len(entry) > 3500:
-                await update.message.reply_text(chunk)
-                chunk = entry
-            else:
-                chunk += entry
-        
-        if chunk:
-            await update.message.reply_text(f"🎤 **Interview Questions**\n──────────────────{chunk}")
-        
-        await update.message.reply_text("✅ You're prepared. Go crush it! 💪")
-        
-    except Exception as e:
-        await msg.edit_text("Sorry, there was an error preparing your interview. Please try again.")
-    
-    return ConversationHandler.END
-
 # ─── Follow-Up Engine ───
 
 async def follow_ups(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1051,77 +982,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text("⚠️ No job description saved for this application. Use ✍️ Tailor Resume from the main menu.")
         return
-    
-    # Prep interview for specific application
-    if data.startswith("prep_for:") or data.startswith("more_prep:"):
-        is_more = data.startswith("more_prep:")
-        app_id = data.split(":")[1]
-        app = get_application(app_id)
-        if app:
-            await query.edit_message_text(f"🎤 Preparing {'MORE ' if is_more else ''}interview questions for {app['company']}...")
-            user = update.effective_user
-            db_user, _ = get_or_create_user(user.id, user.username)
-            try:
-                result = await prepare_interview(
-                    company=app['company'], 
-                    role=app['role'], 
-                    resume_text=db_user.get("resume_text"),
-                    more_questions_flag=is_more,
-                    job_description=app.get('description')
-                )
-                
-                # Only send the company briefing on the first run, not when asking for more questions
-                if not is_more:
-                    briefing = result.get("company_briefing", "")
-                    await context.bot.send_message(
-                        chat_id=query.message.chat_id,
-                        text=f"🏢 **{app['company']} Brief**\n──────────────────\n\n{briefing}"
-                    )
-                
-                categories = result.get("categories", [])
-                
-                q_text = ""
-                q_num = 1
-                for cat in categories:
-                    q_text += f"\n**{cat.get('name', 'Category')}**\n"
-                    for q in cat.get("questions", []):
-                        q_text += f"{q_num}. {q.get('question', '')}\n\n"
-                        if q.get('context'):
-                            q_text += f"{q['context']}\n\n"
-                        if q.get('tips') and len(q['tips']) > 0:
-                            for tip in q['tips']:
-                                q_text += f"• {tip}\n"
-                        q_text += "\n"
-                        q_num += 1
-                
-                # Split into chunks if too long (Telegram limit is 4096)
-                MAX_LEN = 3800
-                chunks = []
-                while len(q_text) > MAX_LEN:
-                    split_index = q_text.rfind("\n\n**", 0, MAX_LEN)
-                    if split_index == -1:
-                        split_index = MAX_LEN
-                    chunks.append(q_text[:split_index])
-                    q_text = q_text[split_index:]
-                chunks.append(q_text)
-                
-                for i, chunk in enumerate(chunks):
-                    # Add keyboard only to the last chunk
-                    reply_markup = None
-                    if i == len(chunks) - 1:
-                        keyboard = [[InlineKeyboardButton("➕ 20 More Questions", callback_data=f"more_prep:{app_id}")]]
-                        reply_markup = InlineKeyboardMarkup(keyboard)
-                        
-                    await context.bot.send_message(
-                        chat_id=query.message.chat_id,
-                        text=f"🎤 **{'Additional ' if is_more else ''}Questions (Part {i+1})**\n──────────────────{chunk}" if len(chunks) > 1 else f"🎤 **{'Additional ' if is_more else ''}Questions**\n──────────────────{chunk}",
-                        reply_markup=reply_markup
-                    )
-            except Exception as e:
-                print(f"Error preparing interview: {e}")
-                await context.bot.send_message(chat_id=query.message.chat_id, text="Error preparing interview.")
-        return
-    
     # Follow-up from actions
     if data.startswith("followup:"):
         app_id = data.split(":")[1]
@@ -1923,13 +1783,6 @@ async def input_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📊 My Apps":
         await view_apps(update, context)
         return ConversationHandler.END
-    elif text == "✍️ Tailor Resume":
-        return await tailor_start(update, context)
-    elif text == "🎤 Interview Prep":
-        return await interview_start(update, context)
-    elif text == "⏰ Follow-Ups":
-        await follow_ups(update, context)
-        return ConversationHandler.END
     elif text == "📈 Stats":
         await stats_command(update, context)
         return ConversationHandler.END
@@ -1957,9 +1810,6 @@ async def input_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif intent == "TRACK_APP":
             await update.message.reply_text("➕ It looks like you want to track a new application.")
             return await track_start(update, context)
-        elif intent == "PREP_INTERVIEW":
-            await update.message.reply_text("🎤 Let's prepare you for an interview.")
-            return await interview_start(update, context)
         else:
             await update.message.reply_text(
                 "🤖 I'm your job search copilot. You can ask me to find jobs, track applications, or tailor your resume. "

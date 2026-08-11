@@ -77,10 +77,6 @@ def delete_application(app_id: str):
     supabase = get_supabase()
     supabase.table("applications").delete().eq("id", app_id).execute()
 
-def search_applications(user_id: str, query: str):
-    supabase = get_supabase()
-    response = supabase.table("applications").select("*").eq("user_id", user_id).ilike("company", f"%{query}%").order("applied_date", desc=True).limit(10).execute()
-    return response.data
 
 def get_follow_up_candidates(user_id: str):
     """Get applications older than 7 days with no response and no follow-up sent."""
@@ -106,22 +102,6 @@ def save_generated_doc(user_id: str, doc_type: str, original_text: str, generate
     if application_id: data["application_id"] = application_id
     
     result = supabase.table("generated_docs").insert(data).execute()
-    return result.data[0] if result.data else None
-
-# ─── Interview Prep ───
-
-def save_interview_prep(user_id: str, company: str, role: str, company_research: str, questions_and_answers: str, application_id: str = None):
-    supabase = get_supabase()
-    data = {
-        "user_id": user_id,
-        "company": company,
-        "role": role,
-        "company_research": company_research,
-        "questions_and_answers": questions_and_answers
-    }
-    if application_id: data["application_id"] = application_id
-    
-    result = supabase.table("interview_preps").insert(data).execute()
     return result.data[0] if result.data else None
 
 # ─── Stats ───
@@ -177,13 +157,6 @@ def remove_gmail_account(account_id: str):
     supabase = get_supabase()
     supabase.table("gmail_accounts").delete().eq("id", account_id).execute()
 
-def toggle_job_alerts(user_id: str, enabled: bool):
-    supabase = get_supabase()
-    supabase.table("users").update({"job_alerts_enabled": enabled}).eq("id", user_id).execute()
-
-def update_linkedin_profile(user_id: str, url: str):
-    supabase = get_supabase()
-    supabase.table("users").update({"linkedin_profile_url": url}).eq("id", user_id).execute()
 
 def delete_user_cv(user_id: str):
     supabase = get_supabase()
