@@ -36,7 +36,7 @@ from handlers import (
     find_jobs_experience_handler, find_jobs_go_handler, find_jobs_relax_callback,
     cv_callback_handler, job_analysis_callback, track_job_callback,
     show_jobs_count_callback, show_jobs_more_callback,
-    ingest_job_emails, forwarding_command, forwarding_callback,
+    ingest_job_emails, forwarding_command, forwarding_callback, forwarding_auto_callback,
     interview_prep_callback
 )
 
@@ -117,6 +117,7 @@ ptb_app.add_handler(CallbackQueryHandler(job_analysis_callback, pattern="^job_an
 ptb_app.add_handler(CallbackQueryHandler(track_job_callback, pattern="^track_job:"))
 ptb_app.add_handler(CallbackQueryHandler(find_jobs_relax_callback, pattern="^fj_relax$"))
 ptb_app.add_handler(CallbackQueryHandler(forwarding_callback, pattern="^show_forwarding$"))
+ptb_app.add_handler(CallbackQueryHandler(forwarding_auto_callback, pattern="^forwarding_auto$"))
 ptb_app.add_handler(CallbackQueryHandler(interview_prep_callback, pattern="^prep(_more)?:"))
 ptb_app.add_handler(CallbackQueryHandler(show_jobs_count_callback, pattern="^show_jobs:\d+$"))
 ptb_app.add_handler(CallbackQueryHandler(show_jobs_more_callback, pattern="^show_jobs_more:"))

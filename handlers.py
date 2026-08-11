@@ -535,38 +535,83 @@ async def forwarding_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     token = get_or_create_inbox_token(db_user['id'])
     address = f"u{token}@{inbox_domain}"
 
+    # Manual forwarding leads, because it is the only method a phone-only user can
+    # actually complete — Gmail serves its mobile site no matter what, and that site
+    # has no forwarding or filter settings at all. Presenting the automatic setup
+    # first sent people into a dead end and left them thinking the bot was broken.
     await context.bot.send_message(
         chat_id,
         f"📮 **Your private forwarding address**\n\n"
         f"`{address}`\n"
         f"_(tap to copy)_\n\n"
-        f"Send any job email here and I'll track it automatically. "
-        f"I never get access to your inbox.\n\n"
+        f"Send any job email here and I'll track it — the company, the role, and whether "
+        f"it's an interview, an offer or a rejection. I never get access to your inbox.\n\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"▶️ **Start now — works on your phone**\n\n"
+        f"✅ **Works right now, on your phone**\n\n"
         f"Open a job email in Gmail → tap **⋮** → **Forward** → send it to the address above.\n\n"
-        f"That's all. Do this for any job email and it lands in your tracker.\n\n"
+        f"That's a completely normal way to use me — it does everything the automatic "
+        f"setup does, you just tap forward yourself.\n\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"⚡ **Make it automatic — one time, on a browser**\n\n"
-        f"_The Gmail app has no forwarding settings, so this part must be done on the "
-        f"Gmail website._\n\n"
-        f"1. Open **Chrome** → go to **mail.google.com**\n"
-        f"2. Tap **⋮** → tick **Desktop site** _(on iPhone: **aA** → Request Desktop Website)_\n"
-        f"3. Tap **⚙️** → **See all settings** → **Forwarding and POP/IMAP**\n"
-        f"4. **Add a forwarding address** → paste your address → Next → Proceed\n"
-        f"5. Gmail sends a confirmation — **I'll message you the link here**. Tap it.\n"
-        f"6. Back in settings → **Filters and Blocked Addresses** → **Create a new filter**\n"
-        f"7. In the **Includes the words** box, paste this:\n\n"
-        f"`{md(FORWARDING_FILTER_QUERY)}`\n\n"
-        f"8. Leave every other box empty → click **Create filter** _(bottom right, next to Search)_\n"
-        f"9. Tick **Forward it to** → choose your address → **Create filter**\n\n"
-        f"Now every job email is tracked without you doing anything.\n\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"📚 **Add your past applications**\n\n"
-        f"On the Gmail website, search your old job emails, select them, then "
-        f"**⋮ → Forward as attachment** to this address. Up to 50 at a time.\n\n"
+        f"⚡ **Want it fully automatic?**\n\n"
+        f"Gmail can forward job emails to me on its own, so you never have to think "
+        f"about it. It's a one-time setup, but **Gmail only shows those settings on a "
+        f"computer**.\n\n"
+        f"Tap below for the steps.\n\n"
         f"⚠️ Keep this address private — anyone who has it can add applications "
         f"to your account.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚡ Set up automatic forwarding", callback_data="forwarding_auto")]
+        ]),
+        parse_mode="Markdown",
+    )
+
+
+async def forwarding_auto_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """The full automatic-forwarding walkthrough, kept out of the main message."""
+    query = update.callback_query
+    await query.answer()
+
+    user = update.effective_user
+    db_user, _ = get_or_create_user(user.id, user.username)
+    inbox_domain = os.getenv("INBOX_DOMAIN")
+    if not inbox_domain:
+        return
+    address = f"u{get_or_create_inbox_token(db_user['id'])}@{inbox_domain}"
+
+    await context.bot.send_message(
+        update.effective_chat.id,
+        f"⚡ **Automatic forwarding setup**\n\n"
+        f"**You need a computer for this.** Gmail hides forwarding and filter settings "
+        f"on phones — even with *Desktop site* switched on, it usually still serves the "
+        f"mobile version. Any laptop works, and it's only done once.\n\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"📱 **Only have a phone? Try desktop view**\n\n"
+        f"**Android — Chrome:**\n"
+        f"Tap **⋮** (top right) → tick **Desktop site** → reload *mail.google.com*\n\n"
+        f"**iPhone — Safari:**\n"
+        f"Tap **aA** on the left of the address bar → **Request Desktop Website**\n\n"
+        f"**iPhone — Chrome:**\n"
+        f"Tap **⋯** (bottom right) → **Request Desktop Site**\n\n"
+        f"_If the page still looks like the phone version, Gmail has refused — use a "
+        f"computer, or just keep forwarding emails manually. Both give the same result._\n\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"💻 **On the Gmail website**\n\n"
+        f"1. **⚙️** (top right) → **See all settings**\n"
+        f"2. **Forwarding and POP/IMAP** tab → **Add a forwarding address**\n"
+        f"3. Paste:\n`{address}`\n"
+        f"4. **Next** → **Proceed** → **OK**\n"
+        f"5. Gmail emails a confirmation — **I'll send you the link here.** Tap it.\n"
+        f"6. **Filters and blocked addresses** tab → **Create a new filter**\n"
+        f"7. In the **Includes the words** box paste:\n\n"
+        f"`{md(FORWARDING_FILTER_QUERY)}`\n\n"
+        f"8. Leave every other box empty → **Create filter** _(bottom right — not Search)_\n"
+        f"9. Tick **Forward it to** → choose your address → **Create filter**\n\n"
+        f"Done — every job email is tracked from then on.\n\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"📚 **Add your past applications**\n\n"
+        f"Filters only affect new mail. To bring in old emails: on the Gmail website "
+        f"search your job emails, select them, then **⋮ → Forward as attachment** to "
+        f"your address. Up to 50 at a time.",
         parse_mode="Markdown",
     )
 
