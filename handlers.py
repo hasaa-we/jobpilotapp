@@ -18,7 +18,7 @@ from database import (
     get_gmail_accounts, update_gmail_account_sync, remove_gmail_account,
     delete_user_cv, get_or_create_inbox_token,
     get_credits, has_tokens, consume_tokens, add_credits,
-    FREE_SEARCHES_PER_MONTH, SEARCHES_PER_PACK, TOKENS_PER_SEARCH, TOKENS_PER_PACK
+    FREE_SEARCHES, SEARCHES_PER_PACK, TOKENS_PER_SEARCH, TOKENS_PER_PACK
 )
 from ai_services import (
     tailor_resume, generate_cover_letter,
@@ -363,9 +363,8 @@ async def buy_tokens_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         chat_id=update.effective_chat.id,
         title=f"{SEARCHES_PER_PACK} job searches",
         description=(
-            f"{TOKENS_PER_PACK:,} AI tokens — about {SEARCHES_PER_PACK} LinkedIn searches "
-            f"scored against your CV. Also covers interview prep and email tracking. "
-            f"Never expires."
+            f"{SEARCHES_PER_PACK} LinkedIn searches, each scored against your CV "
+            f"requirement by requirement. Never expires."
         ),
         payload=f"tokens:{TOKENS_PER_PACK}",
         # Stars use the XTR currency and, unlike card payments, need no provider token.
@@ -409,14 +408,13 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
     if credited:
         await update.message.reply_text(
             f"✅ **Thank you!**\n\n"
-            f"**{tokens:,} tokens** added — about **{tokens // TOKENS_PER_SEARCH} searches**.\n"
-            f"They never expire.\n\n"
-            f"Balance: ≈ **{balance['searches']} searches**",
+            f"**{tokens // TOKENS_PER_SEARCH} searches** added — they never expire.\n\n"
+            f"Balance: **{balance['searches']} searches**",
             parse_mode="Markdown",
         )
     else:
         await update.message.reply_text(
-            f"This payment was already credited.\n\nBalance: ≈ {balance['searches']} searches"
+            f"This payment was already credited.\n\nBalance: {balance['searches']} searches"
         )
 
 
@@ -429,8 +427,7 @@ async def require_credit(update: Update, context: ContextTypes.DEFAULT_TYPE, db_
     keyboard = buy_credits_keyboard(db_user)
     text = (
         "🔒 **You're out of searches**\n\n"
-        f"You've used all {FREE_SEARCHES_PER_MONTH} of your free searches this month. "
-        "They reset on the 1st.\n\n"
+        f"You've used all {FREE_SEARCHES} of your free searches.\n\n"
         f"**~{SEARCHES_PER_PACK} more searches — $3**\n"
         "One-off payment, no subscription. Never expires.\n\n"
         "_Email tracking stays free and unlimited — keep forwarding your job emails._"
@@ -448,15 +445,19 @@ async def credits_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     balance = get_credits(db_user['id'])
     left = balance["searches"]
 
-    text = (f"💳 **Your balance**\n\n"
-            f"**≈ {left} searches** remaining\n\n"
-            f"🆓 Free this month: {balance['free_left']:,} tokens _(resets on the 1st)_\n"
-            f"💳 Purchased: {balance['paid']:,} tokens _(never expire)_\n\n"
-            f"Everything the AI does draws from this — searching, interview prep, "
-            f"reading your CV, classifying forwarded email. A search is about "
-            f"{TOKENS_PER_SEARCH:,} tokens.")
+    # Shown in searches, never tokens. Tokens are an internal accounting unit —
+    # they mean nothing to a job seeker and expose the cost structure.
+    free_left = balance["free_left"] // TOKENS_PER_SEARCH
+    paid_left = balance["paid"] // TOKENS_PER_SEARCH
+
+    text = f"💳 **Your balance**\n\n**{left} searches** remaining\n"
+    if paid_left:
+        text += f"\n🆓 Free: {free_left}\n⭐ Purchased: {paid_left} _(never expire)_\n"
+    text += ("\nSearching LinkedIn uses your balance. Email tracking, your CV, your "
+             "pipeline and interview prep are all free.")
     if left <= 3:
-        text += f"\n\n**~{SEARCHES_PER_PACK} searches for $3.** One-off, never expires."
+        text += (f"\n\n**{SEARCHES_PER_PACK} more searches — {PACK_PRICE_STARS} ⭐ Stars.** "
+                 f"One-off, never expires.")
     await update.message.reply_text(
         text, reply_markup=buy_credits_keyboard(db_user) if left <= 3 else None,
         parse_mode="Markdown",

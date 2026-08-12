@@ -193,7 +193,11 @@ def get_or_create_inbox_token(user_id: str) -> str:
 #
 # Measured: one search is ~32,000 tokens (26.7k in, 5.3k out) on gpt-4o-mini.
 TOKENS_PER_SEARCH = 32_000          # for turning a balance into "about N searches"
-FREE_TOKENS_PER_MONTH = 200_000     # ~6 searches, resets on the 1st
+
+# Free allowance, granted once per account and never refilled. Lifetime rather than
+# monthly makes a free user cost ~$0.04 ever, instead of ~$0.04 every month — and
+# removes any reason to track billing periods.
+FREE_TOKENS = 100_000               # ~3 searches
 
 # ~100 searches for 150 Stars. Sized against what actually lands, not the sticker
 # price: a user pays ~$2.75, Apple/Google take ~30% of in-app Star purchases, so
@@ -204,25 +208,20 @@ FREE_TOKENS_PER_MONTH = 200_000     # ~6 searches, resets on the 1st
 TOKENS_PER_PACK = 3_250_000
 
 # Kept for the display strings.
-FREE_SEARCHES_PER_MONTH = FREE_TOKENS_PER_MONTH // TOKENS_PER_SEARCH
+FREE_SEARCHES = FREE_TOKENS // TOKENS_PER_SEARCH
 SEARCHES_PER_PACK = TOKENS_PER_PACK // TOKENS_PER_SEARCH
-
-
-def _current_period() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).strftime("%Y-%m")
 
 
 def get_credits(user_id: str) -> dict:
     """
     Token balance: {'free_left', 'paid', 'total', 'searches'}.
 
-    The free allowance rolls over lazily — if the stored period isn't this month it
-    already counts as reset, so nothing scheduled has to run.
+    The free allowance is a one-off grant, so there is nothing to reset and no
+    period to track.
     """
     supabase = get_supabase()
     response = supabase.table("users").select(
-        "ai_tokens, free_tokens_used, free_period"
+        "ai_tokens, free_tokens_used"
     ).eq("id", user_id).execute()
     if not response.data:
         return {"free_left": 0, "paid": 0, "total": 0, "searches": 0}
@@ -230,10 +229,7 @@ def get_credits(user_id: str) -> dict:
     row = response.data[0]
     paid = row.get("ai_tokens") or 0
     used = row.get("free_tokens_used") or 0
-    if row.get("free_period") != _current_period():
-        used = 0                                   # new month, allowance restored
-
-    free_left = max(0, FREE_TOKENS_PER_MONTH - used)
+    free_left = max(0, FREE_TOKENS - used)
     total = free_left + paid
     return {"free_left": free_left, "paid": paid, "total": total,
             "searches": total // TOKENS_PER_SEARCH}
@@ -246,7 +242,7 @@ def has_tokens(user_id: str, needed: int = TOKENS_PER_SEARCH) -> bool:
 
 def consume_tokens(user_id: str, tokens: int) -> None:
     """
-    Deducts what an action actually used: free allowance first, then purchased.
+    Deducts what an action actually used: the free grant first, then purchased.
 
     Charged after the work, from the API's own usage numbers, so nobody is billed
     for a search that failed. The cost is that a single action can overshoot a
@@ -260,10 +256,7 @@ def consume_tokens(user_id: str, tokens: int) -> None:
     from_free = min(tokens, balance["free_left"])
     from_paid = min(tokens - from_free, balance["paid"])
 
-    update = {
-        "free_tokens_used": (FREE_TOKENS_PER_MONTH - balance["free_left"]) + from_free,
-        "free_period": _current_period(),
-    }
+    update = {"free_tokens_used": (FREE_TOKENS - balance["free_left"]) + from_free}
     if from_paid:
         update["ai_tokens"] = balance["paid"] - from_paid
 
