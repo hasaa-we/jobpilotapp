@@ -240,6 +240,10 @@ async def send_job_cards(bot, chat_id: int, jobs: list, keywords: str, location:
                          f"posting, so open it and judge for yourself)_\n")
             if job.get('filter_uncertain'):
                 text += f"_(ℹ️ LinkedIn didn't publish all filter details for this post)_\n"
+            if job.get('field_fit') == "different":
+                # A low score on a job you could technically do reads as a bug unless
+                # the reason is on the card.
+                text += "_(🔀 Different field to your background — a career change)_\n"
 
             total_reqs = len(job.get('requirements') or [])
             partial_cnt = job.get('partial_count', 0)
@@ -1765,6 +1769,11 @@ async def job_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TY
             fit = job.get('seniority_fit')
             if fit and fit != "match":
                 text += f"📉 Seniority: you are **{md(fit)}** this role's level\n"
+            field = job.get('field_fit')
+            if field == "different":
+                text += "🔀 **Different field** — this is a career change from your background\n"
+            elif field == "adjacent":
+                text += "↔️ Adjacent field — a realistic sideways move\n"
             text += "\n"
 
         # Show each requirement with the ruling the percentage was computed from,

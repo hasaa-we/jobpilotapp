@@ -538,7 +538,14 @@ def _reconcile_degrees(requirements: list, profile: dict) -> list:
     return requirements
 
 
-def _score_from_requirements(requirements: list, seniority_fit: str) -> int:
+# Meeting a job's stated bar is not the same as being a candidate for it. An
+# entry-level sales role that asks only for good English and a willingness to learn
+# is "met" by almost any graduate — which is how a cybersecurity CV scored 95% on
+# cold-calling. Field fit keeps those out of the top of a search without hiding them.
+_FIELD_FACTOR = {"same": 1.0, "adjacent": 0.85, "different": 0.55}
+
+
+def _score_from_requirements(requirements: list, seniority_fit: str, field_fit: str = None) -> int:
     """
     Turns per-requirement verdicts into the percentage.
 
@@ -558,6 +565,7 @@ def _score_from_requirements(requirements: list, seniority_fit: str) -> int:
 
     score = (credit / total) * 100
     score *= _SENIORITY_FACTOR.get(str(seniority_fit or "match").lower(), 1.0)
+    score *= _FIELD_FACTOR.get(str(field_fit or "same").lower(), 1.0)
     return max(0, min(100, round(score)))
 
 
@@ -585,11 +593,15 @@ async def score_job_against_profile(profile_brief: str, job: dict, search_query:
             f"Full posting:\n{_requirements_excerpt(description)}"
         )
         instruction = (
-            "List the substantive requirements the posting states (skills, years, "
-            "education, certifications, languages, location, work authorisation). "
-            "Max 10, merge duplicates, invent nothing. Skip filler like 'team player' "
-            "or 'good communication' — padding distorts the score. Never list perks, benefits "
-            "or what the company offers: a requirement is something the CANDIDATE must have."
+            "List what this job actually demands of the candidate. Read BOTH the "
+            "skills/requirements section AND the responsibilities — a duty implies the "
+            "ability to perform it, so 'make outbound cold calls' is a requirement.\n"
+            "Include the capabilities the role is genuinely built on, even when they are "
+            "soft skills: for a sales role, objection handling, resilience and CRM "
+            "discipline ARE the requirements. Only drop wording so vague it would appear "
+            "in any posting for any job ('hard worker', 'team player').\n"
+            "Max 10, merge duplicates, invent nothing, and never list perks, benefits or "
+            "what the company offers — a requirement is something the CANDIDATE must have."
         )
     else:
         job_block = (
@@ -637,10 +649,14 @@ A named tool implies its practice: GitLab/Jenkins/GitHub Actions = CI/CD, pytest
 The candidate is already searching this region — for a location requirement use "met" if their
 stated location fits, "partial" if unstated. Never "missing".
 seniority_fit: is the CANDIDATE "below", "match" or "above" this role's level?
+field_fit: is this job in the candidate's own field? "same" (their profession),
+"adjacent" (a realistic sideways move — backend dev to data engineer), or
+"different" (a career change — a cybersecurity graduate applying to phone sales).
+Judge the profession, not whether they could scrape through the requirements.
 
 JSON:
 {{"requirements":[{{"text":"short requirement","importance":"must|nice","verdict":"met|partial|missing","evidence":"max 8 words","inferred":false}}],
-"seniority_fit":"below|match|above","verdict_summary":"one short sentence"}}"""
+"seniority_fit":"below|match|above","field_fit":"same|adjacent|different","verdict_summary":"one short sentence"}}"""
 
     # A whole search fires these within seconds, which is exactly the shape that
     # trips a tokens-per-minute limit. Without backoff the job is simply dropped
@@ -664,7 +680,8 @@ JSON:
 
             requirements = _reconcile_degrees(requirements, profile or {})
 
-            score = _score_from_requirements(requirements, data.get("seniority_fit"))
+            score = _score_from_requirements(requirements, data.get("seniority_fit"),
+                                             data.get("field_fit"))
 
             # Guesswork must never outrank evidence. When LinkedIn wouldn't give up
             # the posting, the requirements are invented from the title, so the score
@@ -697,6 +714,7 @@ JSON:
                 "main_gaps": gaps[:3],
                 "verdict_summary": data.get("verdict_summary", ""),
                 "seniority_fit": data.get("seniority_fit", "match"),
+                "field_fit": data.get("field_fit", "same"),
                 "no_description": not has_description,
                 "scored": True,
             }
