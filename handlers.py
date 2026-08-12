@@ -1,7 +1,7 @@
 import os
 import re
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup,
     KeyboardButton, LabeledPrice
@@ -1239,7 +1239,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_id=query.message.chat_id,
                     text=f"📄 **Tailored Resume for {app['company']}**\n──────────────────\n\n{result.get('tailored_resume', '')}"
                 )
-            except:
+            except Exception as e:
+                print(f"Tailor resume failed for application {app_id}: {e}")
                 await context.bot.send_message(chat_id=query.message.chat_id, text="Error tailoring resume.")
         else:
             await query.edit_message_text("⚠️ No job description saved for this application. Use ✍️ Tailor Resume from the main menu.")
@@ -1259,7 +1260,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_id=query.message.chat_id,
                     text=f"📧 **Follow-Up for {app['company']}**\n──────────────────\n\n{email}"
                 )
-            except:
+            except Exception as e:
+                print(f"Follow-up draft failed for application {app_id}: {e}")
                 await context.bot.send_message(chat_id=query.message.chat_id, text="Error drafting follow-up.")
         return
 

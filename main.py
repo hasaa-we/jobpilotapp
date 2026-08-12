@@ -13,10 +13,7 @@ from telegram.ext import (
 )
 from dotenv import load_dotenv
 
-from database import (
-    update_user_profile, add_gmail_account, get_user_by_inbox_token,
-    get_user_by_telegram_id
-)
+from database import add_gmail_account, get_user_by_inbox_token
 from gmail_services import (
     get_auth_url, exchange_code_for_token, encrypt_token, verify_oauth_state
 )
@@ -212,10 +209,21 @@ async def lifespan(app: FastAPI):
     # cold-starts on every wake from idle — so calling them unconditionally fires
     # them dozens of times a day for no reason. Both calls below are therefore
     # made only when something has actually changed.
-    await sync_bot_commands(commands)
-    await sync_webhook()
-    
+    #
+    # They also run in the background rather than being awaited: each is a network
+    # round-trip to Telegram, and awaiting them here delayed the moment the app
+    # could answer /health on every cold start. Neither is needed to serve an
+    # update — the webhook registration already survives a restart.
+    async def configure():
+        await sync_bot_commands(commands)
+        await sync_webhook()
+
+    config_task = asyncio.create_task(configure())
+
     yield
+
+    if not config_task.done():
+        config_task.cancel()
     
     # Shutdown
     await ptb_app.stop()
@@ -285,7 +293,9 @@ async def inbound_email(request: Request):
     if not db_user:
         # 200, not an error: a wrong address is the sender's problem, and retries
         # would achieve nothing.
-        print(f"Inbound email for unknown token {token!r}")
+        # The token is not logged: it is the credential in a user's forwarding
+        # address, and a near-miss of a real one would land in the log verbatim.
+        print("Inbound email for an unrecognised forwarding address")
         return {"ok": True, "ignored": "unknown address"}
 
     records = parse_raw_email(raw.encode("utf-8", errors="replace") if isinstance(raw, str) else raw)
