@@ -226,6 +226,11 @@ async def send_job_cards(bot, chat_id: int, jobs: list, keywords: str, location:
         if not job.get('scored', True):
             if job.get('no_cv'):
                 text += "\n⚪ **Not ranked** — upload a CV to get match scores\n"
+            elif job.get('unreadable'):
+                # Better to say nothing than to invent requirements and a number.
+                text += ("\n⚠️ **Couldn't read this posting**\n"
+                         "LinkedIn didn't return the description, so I won't guess at a match. "
+                         "Open it below to check the requirements yourself.\n")
             else:
                 text += "\n⚪ **Not scored** — beyond the analysis limit for this search\n"
         else:
@@ -1789,8 +1794,12 @@ async def job_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 if r.get('evidence'):
                     text += f"     _{md(r['evidence'])}_\n"
             text += "\n\\* = required by the posting\n"
-            if any(r.get('inferred') for r in requirements):
-                text += "_Italic note: this posting had no description, so requirements were inferred._\n"
+        elif job.get('unreadable'):
+            text += ("⚠️ **Couldn't read this posting.**\n\n"
+                     "LinkedIn didn't return the job description, so there is nothing "
+                     "reliable to compare against your CV — and I'd rather tell you that "
+                     "than invent requirements.\n\n"
+                     "👉 Open the job on LinkedIn and check its requirements yourself.")
         else:
             matched = job.get('matched_qualifications', [])
             missing = job.get('missing_qualifications', [])

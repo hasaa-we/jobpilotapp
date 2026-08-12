@@ -212,10 +212,6 @@ Write ONLY the email body (no subject line needed).
 # Top 5, 10 or 25, so scoring 60 spent roughly half the budget ranking jobs nobody
 # opened. Per-job quality is unaffected — only how deep the ranking goes.
 MAX_SCORED_JOBS = 30
-# Ceiling for jobs scored without their posting. Their requirements are guessed from
-# the title, so the number is a hypothesis and must never compete with a job that was
-# actually read.
-INFERRED_SCORE_CAP = 45
 # Measured against a 30,000 tokens-per-minute account limit: at ~1,900 tokens a
 # call, 8 in flight overruns it within seconds and jobs come back unscored. 4 keeps
 # a search inside the limit, and the backoff in score_job_against_profile absorbs
@@ -579,6 +575,20 @@ async def score_job_against_profile(profile_brief: str, job: dict, search_query:
     description = (job.get("description") or "").strip()
     has_description = len(description) > 120
 
+    # No posting, no score. Guessing requirements from the title produced confident
+    # nonsense — a cybersecurity CV was told a cold-calling job was a 100% match
+    # because the invented requirements happened to be things the CV satisfied.
+    # Saying "I couldn't read this one" is both honest and free.
+    if not has_description:
+        return {
+            "score": 0, "grade": "", "scored": False, "unreadable": True,
+            "no_description": True, "requirements": [],
+            "matched_count": 0, "partial_count": 0, "missing_count": 0,
+            "main_gaps": [], "matched_qualifications": [],
+            "partial_qualifications": [], "missing_qualifications": [],
+            "verdict_summary": "", "seniority_fit": "", "field_fit": "",
+        }
+
     criteria = []
     if job.get("employment_type"):
         criteria.append(f"Employment type: {job['employment_type']}")
@@ -602,23 +612,6 @@ async def score_job_against_profile(profile_brief: str, job: dict, search_query:
             "in any posting for any job ('hard worker', 'team player').\n"
             "Max 10, merge duplicates, invent nothing, and never list perks, benefits or "
             "what the company offers — a requirement is something the CANDIDATE must have."
-        )
-    else:
-        job_block = (
-            f"Title: {job.get('title')}\nCompany: {job.get('company')}\n"
-            f"Location: {job.get('location')}\n{criteria_text}\n\n"
-            f"Posting: NOT AVAILABLE."
-        )
-        instruction = (
-            "No posting text is available. Infer 5-7 requirements from the JOB TITLE "
-            "alone — what this role actually does day to day, and the skills and "
-            "domain knowledge it demands. Set inferred:true on each.\n"
-            "CRITICAL: derive them from the role, NEVER from the candidate profile. "
-            "Do not list things merely because the candidate happens to have them. "
-            "A sales role requires selling, CRM and objection handling regardless of "
-            "who is applying; a security role requires security skills. If the "
-            "candidate's background doesn't fit the role, most of these must come back "
-            "'missing' — that is the correct answer, not a problem to avoid."
         )
 
     # Deliberately terse: this prompt is sent once per job, so every word here is
@@ -655,7 +648,7 @@ field_fit: is this job in the candidate's own field? "same" (their profession),
 Judge the profession, not whether they could scrape through the requirements.
 
 JSON:
-{{"requirements":[{{"text":"short requirement","importance":"must|nice","verdict":"met|partial|missing","evidence":"max 8 words","inferred":false}}],
+{{"requirements":[{{"text":"short requirement","importance":"must|nice","verdict":"met|partial|missing","evidence":"max 8 words"}}],
 "seniority_fit":"below|match|above","field_fit":"same|adjacent|different","verdict_summary":"one short sentence"}}"""
 
     # A whole search fires these within seconds, which is exactly the shape that
@@ -683,14 +676,6 @@ JSON:
             score = _score_from_requirements(requirements, data.get("seniority_fit"),
                                              data.get("field_fit"))
 
-            # Guesswork must never outrank evidence. When LinkedIn wouldn't give up
-            # the posting, the requirements are invented from the title, so the score
-            # is a hypothesis — it gets capped and labelled rather than shown as a
-            # confident match. A cybersecurity CV was being told a cold-calling sales
-            # job was a 100% fit purely because the invented requirements happened to
-            # be things the CV satisfied.
-            if not has_description:
-                score = min(score, INFERRED_SCORE_CAP)
 
             matched = [r["text"] for r in requirements if str(r.get("verdict")).lower() == "met"]
             partial = [r["text"] for r in requirements if str(r.get("verdict")).lower() == "partial"]
@@ -784,7 +769,7 @@ async def match_jobs_to_profile(user_profile: dict, jobs: list, search_query: st
             await loop.run_in_executor(None, fetch_desc, job)
         still = sum(1 for j in missing if not (j.get('description') or '').strip())
         if still:
-            print(f"{still} job(s) scored from title only — capped at {INFERRED_SCORE_CAP}%")
+            print(f"{still} job(s) unreadable — shown without a score")
 
     resume_text = user_profile.get('resume_text') or ""
     profile = await parse_resume(resume_text)
@@ -812,7 +797,7 @@ async def match_jobs_to_profile(user_profile: dict, jobs: list, search_query: st
     scored_jobs = list(await asyncio.gather(*[score_one(j) for j in eval_jobs]))
 
     # Jobs with a real posting outrank ones scored from the title alone, since an
-    # inferred score is a guess and shouldn't beat a verified match.
+    # unreadable postings carry no score and must sort last.
     scored_jobs.sort(
         key=lambda j: (j.get('scored', False), not j.get('no_description', False), j.get('score', 0)),
         reverse=True,
