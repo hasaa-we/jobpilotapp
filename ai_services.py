@@ -212,6 +212,10 @@ Write ONLY the email body (no subject line needed).
 # Top 5, 10 or 25, so scoring 60 spent roughly half the budget ranking jobs nobody
 # opened. Per-job quality is unaffected — only how deep the ranking goes.
 MAX_SCORED_JOBS = 30
+# Ceiling for jobs scored without their posting. Their requirements are guessed from
+# the title, so the number is a hypothesis and must never compete with a job that was
+# actually read.
+INFERRED_SCORE_CAP = 45
 # Measured against a 30,000 tokens-per-minute account limit: at ~1,900 tokens a
 # call, 8 in flight overruns it within seconds and jobs come back unscored. 4 keeps
 # a search inside the limit, and the backoff in score_job_against_profile absorbs
@@ -594,8 +598,15 @@ async def score_job_against_profile(profile_brief: str, job: dict, search_query:
             f"Posting: NOT AVAILABLE."
         )
         instruction = (
-            "No posting text, so infer the 4-6 requirements this role normally "
-            "carries and set inferred:true on each."
+            "No posting text is available. Infer 5-7 requirements from the JOB TITLE "
+            "alone — what this role actually does day to day, and the skills and "
+            "domain knowledge it demands. Set inferred:true on each.\n"
+            "CRITICAL: derive them from the role, NEVER from the candidate profile. "
+            "Do not list things merely because the candidate happens to have them. "
+            "A sales role requires selling, CRM and objection handling regardless of "
+            "who is applying; a security role requires security skills. If the "
+            "candidate's background doesn't fit the role, most of these must come back "
+            "'missing' — that is the correct answer, not a problem to avoid."
         )
 
     # Deliberately terse: this prompt is sent once per job, so every word here is
@@ -654,6 +665,15 @@ JSON:
             requirements = _reconcile_degrees(requirements, profile or {})
 
             score = _score_from_requirements(requirements, data.get("seniority_fit"))
+
+            # Guesswork must never outrank evidence. When LinkedIn wouldn't give up
+            # the posting, the requirements are invented from the title, so the score
+            # is a hypothesis — it gets capped and labelled rather than shown as a
+            # confident match. A cybersecurity CV was being told a cold-calling sales
+            # job was a 100% fit purely because the invented requirements happened to
+            # be things the CV satisfied.
+            if not has_description:
+                score = min(score, INFERRED_SCORE_CAP)
 
             matched = [r["text"] for r in requirements if str(r.get("verdict")).lower() == "met"]
             partial = [r["text"] for r in requirements if str(r.get("verdict")).lower() == "partial"]
@@ -733,6 +753,20 @@ async def match_jobs_to_profile(user_profile: dict, jobs: list, search_query: st
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         futures = [loop.run_in_executor(executor, fetch_desc, job) for job in eval_jobs]
         eval_jobs = list(await asyncio.gather(*futures))
+
+    # A search fires ~100 LinkedIn requests against a ~3/second ceiling, so some
+    # descriptions come back empty purely from throttling. Scoring those means
+    # inventing requirements from the title, which is far worse than waiting — so
+    # anything still missing gets one slower, serial retry.
+    missing = [j for j in eval_jobs if not (j.get('description') or '').strip()]
+    if missing:
+        print(f"Retrying {len(missing)} descriptions LinkedIn didn't return first time")
+        await asyncio.sleep(2)
+        for job in missing:
+            await loop.run_in_executor(None, fetch_desc, job)
+        still = sum(1 for j in missing if not (j.get('description') or '').strip())
+        if still:
+            print(f"{still} job(s) scored from title only — capped at {INFERRED_SCORE_CAP}%")
 
     resume_text = user_profile.get('resume_text') or ""
     profile = await parse_resume(resume_text)

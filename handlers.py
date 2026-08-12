@@ -234,7 +234,10 @@ async def send_job_cards(bot, chat_id: int, jobs: list, keywords: str, location:
                 text += f"\n{rank}\n"
             text += f"⭐ **Profile Match**: `{score}%` `[{bar}]` ({badge})\n"
             if job.get('no_description'):
-                text += f"_(ℹ️ Estimated — LinkedIn didn't publish this job's description)_\n"
+                # Say plainly this is a guess: the requirements were invented from the
+                # title because LinkedIn wouldn't return the posting.
+                text += (f"_(⚠️ Guessed from the job title only — LinkedIn didn't return this "
+                         f"posting, so open it and judge for yourself)_\n")
             if job.get('filter_uncertain'):
                 text += f"_(ℹ️ LinkedIn didn't publish all filter details for this post)_\n"
 
@@ -1508,6 +1511,10 @@ async def run_job_search(update, context, db_user, keywords, location, date_post
     # Sized against MAX_SCORED_JOBS rather than "as many as possible": anything past
     # the scoring cap comes back unranked and unscored, which is noise rather than
     # choice. The filtered pool is larger because the filters discard part of it.
+    #
+    # This is also why the count here can differ from the number LinkedIn shows on
+    # its own results page: LinkedIn reports everything it has, this fetches a
+    # working set to rank.
     jobs = await asyncio.to_thread(
         search_linkedin_jobs,
         keywords=keywords,
