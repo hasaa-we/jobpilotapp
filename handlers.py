@@ -1528,7 +1528,7 @@ async def run_job_search(update, context, db_user, keywords, location, date_post
         search_linkedin_jobs,
         keywords=keywords,
         location=resolved_loc,
-        limit=50 if has_post_filters else 40,
+        limit=60 if has_post_filters else 50,
         date_posted=date_posted,
         easy_apply=easy_apply,
     )

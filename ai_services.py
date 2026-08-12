@@ -208,20 +208,15 @@ Write ONLY the email body (no subject line needed).
 
 # ─── Job Matching ───
 
-# One scoring call per job, so this number sets the cost of a search almost by
-# itself — measured at roughly $0.0064 per job on gpt-4o. Ranking deeper finds
-# better matches; ranking shallower is cheaper. 20 is the compromise: it covers
-# more than the Top 10 most people open, without paying to rank jobs nobody sees.
+# One scoring call per job. On gpt-4o this was the whole cost of a search (~$0.0064
+# a job) and had to be rationed; on gpt-4o-mini it is ~$0.0004, so the cap exists
+# now only to bound how long a user waits. Set high enough that a normal search
+# ranks everything and nobody is shown an unscored tail — a good match hiding in
+# that tail was invisible, which is worse than the few cents it saved.
 #
-# A cheap-model shortlist was tested as an alternative and rejected: gpt-4o-mini
-# ranking the full pool missed one of gpt-4o's top 3 even when its shortlist was
-# half the jobs, so it would quietly hide good matches.
-MAX_SCORED_JOBS = 20
-# Measured against a 30,000 tokens-per-minute account limit: at ~1,900 tokens a
-# call, 8 in flight overruns it within seconds and jobs come back unscored. 4 keeps
-# a search inside the limit, and the backoff in score_job_against_profile absorbs
-# whatever still slips through.
-SCORING_CONCURRENCY = 4
+# A cheap-model shortlist feeding gpt-4o was tested as an alternative and rejected:
+# mini missed one of gpt-4o's top 3 even when shortlisting half the pool.
+MAX_SCORED_JOBS = 50
 
 # mini, for cost: a search costs about $0.008 against $0.120 on gpt-4o, and the
 # ranking — which job to read first — came out identical in testing on the current
@@ -233,6 +228,12 @@ SCORING_CONCURRENCY = 4
 # where gpt-4o says ~79. Order is right, the number reads low. If matches start
 # looking wrong, set SCORING_MODEL=gpt-4o and it reverts on the next deploy.
 SCORING_MODEL = os.getenv("SCORING_MODEL", "gpt-4o-mini")
+
+# Sized to the model's own rate limit, read from the API: gpt-4o-mini allows
+# 200,000 tokens/minute against gpt-4o's 30,000. At ~1,500 tokens a call, 12 in
+# flight stays well inside mini's ceiling — and switching SCORING_MODEL back to
+# gpt-4o automatically drops it to 4, or jobs would start failing on 429s.
+SCORING_CONCURRENCY = 12 if "mini" in SCORING_MODEL else 4
 
 GRADES = (
     (85, "Excellent Match"), (70, "Strong Match"),
