@@ -203,7 +203,7 @@ async def lifespan(app: FastAPI):
         BotCommand("start", "Start here"),
         BotCommand("forwarding", "Auto-track jobs from your email"),
         BotCommand("resume", "Tailor your CV for a job"),
-        BotCommand("credits", "Searches remaining"),
+        BotCommand("credits", "Searches left / buy more"),
         BotCommand("stats", "Your dashboard"),
         BotCommand("help", "What I can do"),
         BotCommand("cancel", "Cancel current action")

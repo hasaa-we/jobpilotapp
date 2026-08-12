@@ -4,12 +4,9 @@
 -- Purchased tokens. Never expire, never reset.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_tokens BIGINT DEFAULT 0;
 
--- The free monthly allowance is tracked apart from purchases, so a monthly reset
--- can never wipe something a user paid for.
+-- The free allowance is granted once per account and never refilled. Tracked apart
+-- from purchases so it can never be confused with something a user paid for.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS free_tokens_used BIGINT DEFAULT 0;
--- Which month those free tokens belong to, as YYYY-MM. A different month means the
--- allowance has already rolled over, so no scheduled job is needed.
-ALTER TABLE users ADD COLUMN IF NOT EXISTS free_period TEXT;
 
 UPDATE users SET ai_tokens = 0 WHERE ai_tokens IS NULL;
 UPDATE users SET free_tokens_used = 0 WHERE free_tokens_used IS NULL;

@@ -295,7 +295,7 @@ def get_main_keyboard(user_dict=None):
     keyboard = [
         [KeyboardButton("📄 My CV"), KeyboardButton("📊 My Apps")],
         [KeyboardButton("📈 Stats"), KeyboardButton("🔍 Find Jobs")],
-        [KeyboardButton("📧 Email Tracking")]
+        [KeyboardButton("📧 Email Tracking"), KeyboardButton("⭐ Searches")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
@@ -454,13 +454,14 @@ async def credits_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if paid_left:
         text += f"\n🆓 Free: {free_left}\n⭐ Purchased: {paid_left} _(never expire)_\n"
     text += ("\nSearching LinkedIn uses your balance. Email tracking, your CV, your "
-             "pipeline and interview prep are all free.")
-    if left <= 3:
-        text += (f"\n\n**{SEARCHES_PER_PACK} more searches — {PACK_PRICE_STARS} ⭐ Stars.** "
-                 f"One-off, never expires.")
+             "pipeline and interview prep are all free.\n\n"
+             f"**{SEARCHES_PER_PACK} more searches — {PACK_PRICE_STARS} ⭐ Stars.** "
+             "One-off, never expires. Paid inside Telegram — no card details, "
+             "nothing leaves the app.")
+    # The buy button is always here, not only when the balance runs low: a user who
+    # never sees a price never learns the bot is buyable.
     await update.message.reply_text(
-        text, reply_markup=buy_credits_keyboard(db_user) if left <= 3 else None,
-        parse_mode="Markdown",
+        text, reply_markup=buy_credits_keyboard(db_user), parse_mode="Markdown",
     )
 
 
@@ -1131,10 +1132,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 **My Apps** — your application pipeline
 📄 **My CV** — the CV I match jobs against
 📈 **Stats** — response rate and progress
+⭐ **Searches** — your balance, and how to buy more
 
 **Commands:**
 /forwarding — Your private email address for auto-tracking
 /resume — Tailor your CV for a job
+/credits — Searches remaining
 /stats — Your dashboard
 /cancel — Stop what you're doing
 /help — This menu
@@ -2078,6 +2081,9 @@ async def input_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await my_cv_command(update, context)
     elif text == "🔍 Find Jobs":
         return await find_jobs_start(update, context)
+    elif text == "⭐ Searches":
+        await credits_command(update, context)
+        return ConversationHandler.END
     else:
         # Use AI to classify the user's natural language intent
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")

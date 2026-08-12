@@ -197,7 +197,7 @@ TOKENS_PER_SEARCH = 32_000          # for turning a balance into "about N search
 # Free allowance, granted once per account and never refilled. Lifetime rather than
 # monthly makes a free user cost ~$0.04 ever, instead of ~$0.04 every month — and
 # removes any reason to track billing periods.
-FREE_TOKENS = 100_000               # ~3 searches
+FREE_TOKENS = 160_000               # ~5 searches
 
 # ~100 searches for 150 Stars. Sized against what actually lands, not the sticker
 # price: a user pays ~$2.75, Apple/Google take ~30% of in-app Star purchases, so
