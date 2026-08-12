@@ -13,7 +13,8 @@ from database import (
     get_follow_up_candidates, mark_follow_up_sent,
     save_generated_doc, get_user_stats,
     get_gmail_accounts, update_gmail_account_sync, remove_gmail_account,
-    delete_user_cv, get_or_create_inbox_token
+    delete_user_cv, get_or_create_inbox_token,
+    get_credits, consume_credit, FREE_SEARCHES_PER_MONTH, CREDITS_PER_PACK
 )
 from ai_services import (
     tailor_resume, generate_cover_letter,
@@ -333,6 +334,63 @@ STATUS_EMOJI = {
     "rejected": "❌",
     "ghosted": "👻"
 }
+
+# ─── Search Credits ───
+
+def buy_credits_keyboard(db_user: dict) -> InlineKeyboardMarkup:
+    """
+    Buy button. Stripe is told which account to credit via client_reference_id —
+    without it a payment arrives with no way to know whose it was.
+    """
+    link = os.getenv("STRIPE_PAYMENT_LINK")
+    rows = []
+    if link:
+        joiner = "&" if "?" in link else "?"
+        rows.append([InlineKeyboardButton(
+            f"💳 Buy {CREDITS_PER_PACK} searches",
+            url=f"{link}{joiner}client_reference_id={db_user['telegram_id']}",
+        )])
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
+async def require_credit(update: Update, context: ContextTypes.DEFAULT_TYPE, db_user: dict) -> bool:
+    """Spends one credit, or explains why the search didn't run."""
+    if consume_credit(db_user['id']):
+        return True
+
+    chat_id = update.effective_chat.id
+    keyboard = buy_credits_keyboard(db_user)
+    text = (
+        "🔒 **You're out of searches**\n\n"
+        f"You've used all {FREE_SEARCHES_PER_MONTH} of your free searches this month. "
+        "They reset on the 1st.\n\n"
+        f"**{CREDITS_PER_PACK} more searches — $3**\n"
+        "One-off payment, no subscription. Credits never expire.\n\n"
+        "_Email tracking stays free and unlimited — keep forwarding your job emails._"
+    )
+    if not keyboard:
+        text += "\n\n⚠️ Payments aren't set up on this server yet."
+    await context.bot.send_message(chat_id, text, reply_markup=keyboard, parse_mode="Markdown")
+    return False
+
+
+async def credits_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows the remaining balance and how to top up."""
+    user = update.effective_user
+    db_user, _ = get_or_create_user(user.id, user.username)
+    left = get_credits(db_user['id'])
+
+    text = (f"💳 **Your searches**\n\n"
+            f"Remaining: **{left}**\n\n"
+            f"Each LinkedIn search costs 1 credit. Email tracking, your CV, your "
+            f"pipeline and interview prep are all free.")
+    if left <= 2:
+        text += f"\n\n**{CREDITS_PER_PACK} searches — $3.** One-off, never expires."
+    await update.message.reply_text(
+        text, reply_markup=buy_credits_keyboard(db_user) if left <= 2 else None,
+        parse_mode="Markdown",
+    )
+
 
 # ─── Interview Prep ───
 
@@ -1506,6 +1564,9 @@ async def run_job_search(update, context, db_user, keywords, location, date_post
     result set matches what the same filters return on linkedin.com.
     """
     chat_id = update.effective_chat.id
+    if not await require_credit(update, context, db_user):
+        return
+
     resolved_loc, _ = resolve_location(location)
     has_post_filters = bool(work_type or job_type or experience_level)
 

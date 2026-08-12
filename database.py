@@ -184,6 +184,107 @@ def get_or_create_inbox_token(user_id: str) -> str:
     supabase.table("users").update({"inbox_token": token}).eq("id", user_id).execute()
     return token
 
+# ─── Search Credits ───
+
+FREE_SEARCHES_PER_MONTH = 5   # resets on the 1st
+CREDITS_PER_PACK = 200        # what one purchase buys
+
+
+def _current_period() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m")
+
+
+def get_credits(user_id: str) -> dict:
+    """
+    Returns {'free_left', 'paid', 'total'}.
+
+    The free allowance rolls over lazily: if the stored period isn't this month,
+    it already counts as reset. Nothing scheduled has to run for that to be true.
+    """
+    supabase = get_supabase()
+    response = supabase.table("users").select(
+        "search_credits, free_searches_used, free_period"
+    ).eq("id", user_id).execute()
+    if not response.data:
+        return {"free_left": 0, "paid": 0, "total": 0}
+
+    row = response.data[0]
+    paid = row.get("search_credits") or 0
+    used = row.get("free_searches_used") or 0
+    if row.get("free_period") != _current_period():
+        used = 0                                    # new month, allowance restored
+
+    free_left = max(0, FREE_SEARCHES_PER_MONTH - used)
+    return {"free_left": free_left, "paid": paid, "total": free_left + paid}
+
+
+def consume_credit(user_id: str, amount: int = 1) -> bool:
+    """
+    Spends one search: the free monthly allowance first, then purchased credits.
+
+    Free before paid matters — spending someone's purchase while they still have
+    free searches left would be taking money for nothing.
+
+    Read-then-write, so two searches fired at the same instant could both pass the
+    check. Losing a credit occasionally is the right way to fail here; the
+    alternative is a database function for something worth a fraction of a cent.
+    """
+    balance = get_credits(user_id)
+    if balance["total"] < amount:
+        return False
+
+    supabase = get_supabase()
+    period = _current_period()
+
+    from_free = min(amount, balance["free_left"])
+    from_paid = amount - from_free
+
+    update = {
+        "free_searches_used": (FREE_SEARCHES_PER_MONTH - balance["free_left"]) + from_free,
+        "free_period": period,
+    }
+    if from_paid:
+        update["search_credits"] = balance["paid"] - from_paid
+
+    supabase.table("users").update(update).eq("id", user_id).execute()
+    return True
+
+
+def add_credits(user_id: str, credits: int, stripe_event_id: str,
+                amount_cents: int = None, currency: str = None) -> bool:
+    """
+    Credits a purchase, once.
+
+    Stripe retries webhooks until it gets a 2xx, so the same payment arrives more
+    than once. The unique constraint on stripe_event_id is what makes a repeat a
+    no-op instead of free credits.
+    """
+    supabase = get_supabase()
+    try:
+        supabase.table("credit_purchases").insert({
+            "user_id": user_id,
+            "stripe_event_id": stripe_event_id,
+            "credits": credits,
+            "amount_cents": amount_cents,
+            "currency": currency,
+        }).execute()
+    except Exception as e:
+        print(f"Purchase {stripe_event_id} already recorded, not crediting again: {e}")
+        return False
+
+    supabase.table("users").update(
+        {"search_credits": get_credits(user_id)["paid"] + credits}
+    ).eq("id", user_id).execute()
+    return True
+
+
+def get_user_by_telegram_id(telegram_id: int):
+    supabase = get_supabase()
+    response = supabase.table("users").select("*").eq("telegram_id", telegram_id).execute()
+    return response.data[0] if response.data else None
+
+
 def get_user_by_inbox_token(token: str):
     if not token:
         return None
