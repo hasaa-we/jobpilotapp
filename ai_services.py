@@ -208,10 +208,15 @@ Write ONLY the email body (no subject line needed).
 
 # ─── Job Matching ───
 
-# One scoring call per job, so this number is the bot's dominant cost. Users open
-# Top 5, 10 or 25, so scoring 60 spent roughly half the budget ranking jobs nobody
-# opened. Per-job quality is unaffected — only how deep the ranking goes.
-MAX_SCORED_JOBS = 30
+# One scoring call per job, so this number sets the cost of a search almost by
+# itself — measured at roughly $0.0064 per job on gpt-4o. Ranking deeper finds
+# better matches; ranking shallower is cheaper. 20 is the compromise: it covers
+# more than the Top 10 most people open, without paying to rank jobs nobody sees.
+#
+# A cheap-model shortlist was tested as an alternative and rejected: gpt-4o-mini
+# ranking the full pool missed one of gpt-4o's top 3 even when its shortlist was
+# half the jobs, so it would quietly hide good matches.
+MAX_SCORED_JOBS = 20
 # Measured against a 30,000 tokens-per-minute account limit: at ~1,900 tokens a
 # call, 8 in flight overruns it within seconds and jobs come back unscored. 4 keeps
 # a search inside the limit, and the backoff in score_job_against_profile absorbs
@@ -610,7 +615,7 @@ async def score_job_against_profile(profile_brief: str, job: dict, search_query:
             "soft skills: for a sales role, objection handling, resilience and CRM "
             "discipline ARE the requirements. Only drop wording so vague it would appear "
             "in any posting for any job ('hard worker', 'team player').\n"
-            "Max 10, merge duplicates, invent nothing, and never list perks, benefits or "
+            "Max 8, merge duplicates, invent nothing, and never list perks, benefits or "
             "what the company offers — a requirement is something the CANDIDATE must have."
         )
 
@@ -648,7 +653,7 @@ field_fit: is this job in the candidate's own field? "same" (their profession),
 Judge the profession, not whether they could scrape through the requirements.
 
 JSON:
-{{"requirements":[{{"text":"short requirement","importance":"must|nice","verdict":"met|partial|missing","evidence":"max 8 words"}}],
+{{"requirements":[{{"text":"short requirement","importance":"must|nice","verdict":"met|partial|missing","evidence":"max 6 words"}}],
 "seniority_fit":"below|match|above","field_fit":"same|adjacent|different","verdict_summary":"one short sentence"}}"""
 
     # A whole search fires these within seconds, which is exactly the shape that
@@ -664,7 +669,7 @@ JSON:
                 temperature=0,
                 # Output is the expensive half. Ten requirements with short evidence
                 # fit comfortably; the cap only stops a runaway response.
-                max_tokens=700,
+                max_tokens=550,
             )
             data = json.loads(response.choices[0].message.content)
             requirements = data.get("requirements") or []

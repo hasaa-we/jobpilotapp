@@ -1623,8 +1623,7 @@ async def run_job_search(update, context, db_user, keywords, location, date_post
     keyboard = [
         [InlineKeyboardButton("🏆 Top 5", callback_data="show_jobs:5"),
          InlineKeyboardButton("🔟 Top 10", callback_data="show_jobs:10")],
-        [InlineKeyboardButton("📋 Top 25", callback_data="show_jobs:25"),
-         InlineKeyboardButton(f"📂 All ({total})", callback_data=f"show_jobs:{total}")],
+        [InlineKeyboardButton(f"📂 All ({total})", callback_data=f"show_jobs:{total}")],
         [InlineKeyboardButton("🔗 Open this search on LinkedIn", url=linkedin_url)],
     ]
     await context.bot.send_message(
