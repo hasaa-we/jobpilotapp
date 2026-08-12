@@ -1505,14 +1505,14 @@ async def run_job_search(update, context, db_user, keywords, location, date_post
 
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
-    # Checking a posting's LinkedIn criteria costs one throttled request, so the
-    # candidate pool is smaller when those filters are on. Scoring caps at 50
-    # jobs either way, so a bigger pool would mostly buy waiting time.
+    # Sized against MAX_SCORED_JOBS rather than "as many as possible": anything past
+    # the scoring cap comes back unranked and unscored, which is noise rather than
+    # choice. The filtered pool is larger because the filters discard part of it.
     jobs = await asyncio.to_thread(
         search_linkedin_jobs,
         keywords=keywords,
         location=resolved_loc,
-        limit=60 if has_post_filters else 100,
+        limit=50 if has_post_filters else 40,
         date_posted=date_posted,
         easy_apply=easy_apply,
     )

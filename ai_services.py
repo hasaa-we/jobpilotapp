@@ -207,14 +207,18 @@ Write ONLY the email body (no subject line needed).
 
 # ─── Job Matching ───
 
-MAX_SCORED_JOBS = 60
+# One scoring call per job, so this number is the bot's dominant cost. Users open
+# Top 5, 10 or 25, so scoring 60 spent roughly half the budget ranking jobs nobody
+# opened. Per-job quality is unaffected — only how deep the ranking goes.
+MAX_SCORED_JOBS = 30
 SCORING_CONCURRENCY = 8
 
-# Scoring is the dominant cost in the whole bot: one call per job, up to
-# MAX_SCORED_JOBS of them per search. Set SCORING_MODEL=gpt-4o-mini in the
-# environment to cut that bill by roughly 15-20x — the task is now structured
-# classification (judge each requirement; Python does the arithmetic), which mini
-# handles well, but verify the calibration before trusting it on real searches.
+# Measured on 8 real postings plus 4 calibration cases, gpt-4o-mini is NOT a drop-in
+# here: it scored a near-perfect match 74 instead of 87, compressed the whole scale
+# (74-24 against 87-8), disagreed by 11 points on average, swung 11 points between
+# identical runs, and picked a different top job and a different top 3. Ranking is
+# the product, so the saving isn't worth it. Left configurable, but don't switch
+# without re-running that comparison.
 SCORING_MODEL = os.getenv("SCORING_MODEL", "gpt-4o")
 
 GRADES = (
