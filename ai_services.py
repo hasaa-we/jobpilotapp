@@ -208,15 +208,14 @@ Write ONLY the email body (no subject line needed).
 
 # ─── Job Matching ───
 
-# One scoring call per job. On gpt-4o this was the whole cost of a search (~$0.0064
-# a job) and had to be rationed; on gpt-4o-mini it is ~$0.0004, so the cap exists
-# now only to bound how long a user waits. Set high enough that a normal search
-# ranks everything and nobody is shown an unscored tail — a good match hiding in
-# that tail was invisible, which is worse than the few cents it saved.
+# One scoring call per job, so this bounds both cost and how long a search takes.
+# 20 covers well past the Top 10 most people actually open; the rest of the pool is
+# still returned, just unranked. Ranking all 45 was tried and cost 14 extra seconds
+# and 2x the money for jobs nobody scrolls to.
 #
 # A cheap-model shortlist feeding gpt-4o was tested as an alternative and rejected:
 # mini missed one of gpt-4o's top 3 even when shortlisting half the pool.
-MAX_SCORED_JOBS = 50
+MAX_SCORED_JOBS = 20
 
 # mini, for cost: a search costs about $0.008 against $0.120 on gpt-4o, and the
 # ranking — which job to read first — came out identical in testing on the current
