@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import asyncio
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
@@ -211,7 +212,11 @@ Write ONLY the email body (no subject line needed).
 # Top 5, 10 or 25, so scoring 60 spent roughly half the budget ranking jobs nobody
 # opened. Per-job quality is unaffected — only how deep the ranking goes.
 MAX_SCORED_JOBS = 30
-SCORING_CONCURRENCY = 8
+# Measured against a 30,000 tokens-per-minute account limit: at ~1,900 tokens a
+# call, 8 in flight overruns it within seconds and jobs come back unscored. 4 keeps
+# a search inside the limit, and the backoff in score_job_against_profile absorbs
+# whatever still slips through.
+SCORING_CONCURRENCY = 4
 
 # Measured on 8 real postings plus 4 calibration cases, gpt-4o-mini is NOT a drop-in
 # here: it scored a near-perfect match 74 instead of 87, compressed the whole scale
@@ -465,6 +470,70 @@ def _requirements_excerpt(description: str, budget: int = 5000) -> str:
     return "\n".join(out)
 
 
+_DEGREE_RANK = {"phd": 4, "doctorate": 4, "dphil": 4,
+                "master": 3, "msc": 3, "m.s": 3, "ma ": 3, "mba": 3, "meng": 3,
+                "bachelor": 2, "bsc": 2, "b.s": 2, "bs ": 2, "ba ": 2, "beng": 2, "undergraduate": 2,
+                "associate": 1, "diploma": 1}
+
+_DEGREE_WORDS = re.compile(r"\b(phd|doctorate|dphil|master'?s?|msc|m\.s|mba|meng|"
+                           r"bachelor'?s?|bsc|b\.s|beng|associate|diploma|degree)\b", re.I)
+
+
+def _degree_rank(text: str, lowest: bool = False) -> int:
+    """
+    Highest degree level named in the text — or the lowest, for requirements.
+
+    "Bachelor's or Master's in CS" lists alternatives, so the bachelor's is what
+    actually has to be cleared. Taking the maximum there rejected candidates who
+    met the requirement outright.
+    """
+    low = (text or "").lower()
+    found = [rank for key, rank in _DEGREE_RANK.items() if key in low]
+    if not found:
+        return 0
+    return min(found) if lowest else max(found)
+
+
+def _reconcile_degrees(requirements: list, profile: dict) -> list:
+    """
+    Corrects degree verdicts from the parsed education, in code.
+
+    Whether a BSc in Computer Science satisfies "bachelor's in CS or related" is a
+    lookup, not a judgement — but the model kept answering "partial" on degrees the
+    candidate plainly holds, which quietly cost real points. Structured data the
+    parser already extracted decides it instead.
+    """
+    education = profile.get("education") or []
+    if not education:
+        return requirements
+
+    held_rank = max((_degree_rank(f"{e.get('degree','')} ") for e in education), default=0)
+    held_fields = " ".join(f"{e.get('degree','')} {e.get('field','')}" for e in education).lower()
+
+    for req in requirements:
+        text = str(req.get("text", ""))
+        if not _DEGREE_WORDS.search(text):
+            continue
+
+        needed = _degree_rank(text, lowest=True)
+        if not needed or not held_rank:
+            continue
+
+        low = text.lower()
+        # "or related field" means the field barely constrains anything.
+        related_ok = "related" in low or "equivalent" in low or any(
+            w in held_fields for w in re.findall(r"[a-z]{4,}", low)
+        )
+        if held_rank >= needed and related_ok:
+            req["verdict"] = "met"
+            req["evidence"] = next(
+                (f"{e.get('degree','')} {e.get('field','')}".strip() for e in education), "degree held"
+            )
+        elif held_rank < needed:
+            req["verdict"] = "missing"
+    return requirements
+
+
 def _score_from_requirements(requirements: list, seniority_fit: str) -> int:
     """
     Turns per-requirement verdicts into the percentage.
@@ -488,7 +557,8 @@ def _score_from_requirements(requirements: list, seniority_fit: str) -> int:
     return max(0, min(100, round(score)))
 
 
-async def score_job_against_profile(profile_brief: str, job: dict, search_query: str = "") -> dict:
+async def score_job_against_profile(profile_brief: str, job: dict, search_query: str = "",
+                                    profile: dict = None) -> dict:
     """
     Judges one job on its own. Scoring each job in isolation removes the batch
     effects that made scores depend on a job's neighbours, and means a malformed
@@ -514,7 +584,8 @@ async def score_job_against_profile(profile_brief: str, job: dict, search_query:
             "List the substantive requirements the posting states (skills, years, "
             "education, certifications, languages, location, work authorisation). "
             "Max 10, merge duplicates, invent nothing. Skip filler like 'team player' "
-            "or 'good communication' — padding distorts the score."
+            "or 'good communication' — padding distorts the score. Never list perks, benefits "
+            "or what the company offers: a requirement is something the CANDIDATE must have."
         )
     else:
         job_block = (
@@ -547,7 +618,10 @@ importance: "must" = stated hard requirement, "nice" = preferred/bonus.
 
 Rules: don't award "met" without evidence, or "missing" when the profile plainly shows it.
 An equivalent skill is "met" (Flask satisfies "a Python web framework"; PostgreSQL satisfies "SQL").
-A degree requirement is "met" when Education lists that degree in that field — not "partial".
+Degrees: "met" if Education lists that level or higher in a related field (a BSc in Computer
+Science meets "bachelor's in CS or related", and a PhD meets a master's requirement). Only use
+"missing" when the required level is genuinely higher than anything held. Never "partial" for a
+degree the candidate clearly holds.
 A named tool implies its practice: GitLab/Jenkins/GitHub Actions = CI/CD, pytest/JUnit = testing.
 The candidate is already searching this region — for a location requirement use "met" if their
 stated location fits, "partial" if unstated. Never "missing".
@@ -557,7 +631,11 @@ JSON:
 {{"requirements":[{{"text":"short requirement","importance":"must|nice","verdict":"met|partial|missing","evidence":"max 8 words","inferred":false}}],
 "seniority_fit":"below|match|above","verdict_summary":"one short sentence"}}"""
 
-    for attempt in range(2):
+    # A whole search fires these within seconds, which is exactly the shape that
+    # trips a tokens-per-minute limit. Without backoff the job is simply dropped
+    # and shown as unscored, so the user silently loses results whenever the
+    # account is busy.
+    for attempt in range(4):
         try:
             response = await client.chat.completions.create(
                 model=SCORING_MODEL,
@@ -572,6 +650,8 @@ JSON:
             requirements = data.get("requirements") or []
             if not requirements:
                 raise ValueError("no requirements returned")
+
+            requirements = _reconcile_degrees(requirements, profile or {})
 
             score = _score_from_requirements(requirements, data.get("seniority_fit"))
 
@@ -601,7 +681,12 @@ JSON:
                 "scored": True,
             }
         except Exception as e:
-            if attempt == 0:
+            rate_limited = "429" in str(e) or "rate_limit" in str(e).lower()
+            if attempt < 3:
+                # A per-minute limit only clears with time, so retrying immediately
+                # just burns the remaining attempts. Back off, and harder when the
+                # error says the account is over its quota.
+                await asyncio.sleep((4 if rate_limited else 1) * (attempt + 1))
                 continue
             print(f"Error scoring '{job.get('title')}': {e}")
 
@@ -664,7 +749,7 @@ async def match_jobs_to_profile(user_profile: dict, jobs: list, search_query: st
             return job
 
         async with semaphore:
-            result = await score_job_against_profile(brief, job, search_query)
+            result = await score_job_against_profile(brief, job, search_query, profile=profile)
         # Only successful scores are cached; a failed one should be retried next time
         # rather than pinned as a permanent 0%.
         if result.get('scored'):
