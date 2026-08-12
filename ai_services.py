@@ -223,13 +223,16 @@ MAX_SCORED_JOBS = 20
 # whatever still slips through.
 SCORING_CONCURRENCY = 4
 
-# Measured on 8 real postings plus 4 calibration cases, gpt-4o-mini is NOT a drop-in
-# here: it scored a near-perfect match 74 instead of 87, compressed the whole scale
-# (74-24 against 87-8), disagreed by 11 points on average, swung 11 points between
-# identical runs, and picked a different top job and a different top 3. Ranking is
-# the product, so the saving isn't worth it. Left configurable, but don't switch
-# without re-running that comparison.
-SCORING_MODEL = os.getenv("SCORING_MODEL", "gpt-4o")
+# mini, for cost: a search costs about $0.008 against $0.120 on gpt-4o, and the
+# ranking — which job to read first — came out identical in testing on the current
+# pipeline (same #1, same top 3). Most of the judgement now happens in code rather
+# than in the model: degrees are reconciled from parsed education and the percentage
+# is arithmetic over the verdicts, which is why a smaller model holds up here.
+#
+# The known cost: mini compresses the top of the scale, scoring a strong match ~62
+# where gpt-4o says ~79. Order is right, the number reads low. If matches start
+# looking wrong, set SCORING_MODEL=gpt-4o and it reverts on the next deploy.
+SCORING_MODEL = os.getenv("SCORING_MODEL", "gpt-4o-mini")
 
 GRADES = (
     (85, "Excellent Match"), (70, "Strong Match"),
