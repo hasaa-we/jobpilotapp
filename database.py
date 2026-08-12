@@ -194,7 +194,14 @@ def get_or_create_inbox_token(user_id: str) -> str:
 # Measured: one search is ~32,000 tokens (26.7k in, 5.3k out) on gpt-4o-mini.
 TOKENS_PER_SEARCH = 32_000          # for turning a balance into "about N searches"
 FREE_TOKENS_PER_MONTH = 200_000     # ~6 searches, resets on the 1st
-TOKENS_PER_PACK = 6_500_000         # $3 buys ~200 searches; costs ~$1.47 to serve
+
+# ~100 searches for 150 Stars. Sized against what actually lands, not the sticker
+# price: a user pays ~$2.75, Apple/Google take ~30% of in-app Star purchases, so
+# roughly $1.95 arrives. At ~$0.0069 a search this pack costs ~$0.69 to serve and
+# stays profitable even if the payout rate is worse than assumed. Raising the pack
+# rather than the price was the deliberate choice — $2.75 converts far better on a
+# first purchase than $4.49, and a heavy user simply buys again.
+TOKENS_PER_PACK = 3_250_000
 
 # Kept for the display strings.
 FREE_SEARCHES_PER_MONTH = FREE_TOKENS_PER_MONTH // TOKENS_PER_SEARCH
