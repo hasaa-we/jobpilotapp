@@ -339,8 +339,10 @@ Return exactly:
   "total_years_experience": number,
   "current_or_last_title": "string",
   "past_titles": ["string"],
+  "all_skills": ["EVERY skill, technology, tool, language, method, concept or quality named anywhere in the CV — skills sections, summary, projects, jobs, coursework. Copy them verbatim. Do not filter, rank, judge or summarise: this is the complete inventory, and anything left out here can never be matched against a job"],
   "core_skills": ["skills used substantially, with real evidence in the CV"],
   "familiar_skills": ["skills touched briefly, coursework, or self-taught"],
+  "soft_skills": ["interpersonal and working qualities the CV states or evidences: teamwork, communication, problem solving, analytical thinking, leadership, adaptability"],
   "tools": ["frameworks, platforms, databases, tooling"],
   "practices": ["working practices evidenced in the CV, named plainly: CI/CD, unit testing, code review, Agile, REST API design, containerisation"],
   "domains": ["industries or problem areas worked in"],
@@ -392,8 +394,16 @@ def _profile_brief(profile: dict, fallback_resume: str = "") -> str:
         f"Total experience: {profile.get('total_years_experience', 'unknown')} years\n"
         f"Current/last title: {profile.get('current_or_last_title', 'unknown')}\n"
         f"Past titles: {join('past_titles')}\n"
+        # The complete inventory, unfiltered. The categorised lists below are a
+        # judgement about depth; this one is the record of what the CV actually says.
+        # Without it, any skill that didn't fit a category was invisible to scoring.
+        f"ALL skills named on the CV: {join('all_skills', 120)}\n"
         f"Core skills (strong evidence): {join('core_skills')}\n"
         f"Familiar skills (light exposure): {join('familiar_skills')}\n"
+        # Most postings list teamwork, communication and problem solving as real
+        # requirements. Without this line the profile had nowhere to carry them, so
+        # every one of them came back "no evidence" even when the CV said so outright.
+        f"Soft skills: {join('soft_skills')}\n"
         f"Tools: {join('tools')}\n"
         # Without this, "CI pipelines on GitLab" compressed to just "GitLab" and a
         # CI/CD requirement came back "missing" even though the CV evidenced it.
@@ -579,6 +589,94 @@ def _reconcile_degrees(requirements: list, profile: dict) -> list:
     return requirements
 
 
+# Words that carry no distinguishing meaning in a requirement line. Stripping them
+# leaves the part that actually has to match something in the CV.
+_REQ_FILLER = {
+    "and", "or", "in", "of", "with", "the", "a", "an", "to", "for", "on", "at", "as",
+    "good", "strong", "excellent", "solid", "proven", "demonstrated", "great",
+    "skills", "skill", "ability", "abilities", "knowledge", "understanding",
+    "experience", "experienced", "must", "is", "are", "be", "have", "has", "very",
+    "working", "hands", "level", "using", "use", "well", "high", "highly",
+}
+
+# Abbreviations a plain word match would miss. The CV says "OOP"; the posting says
+# "Object Oriented Programming".
+_SKILL_ALIASES = {
+    "oop": "object oriented programming",
+    "ood": "object oriented design",
+    "ci/cd": "continuous integration deployment",
+    "ml": "machine learning",
+    "ai": "artificial intelligence",
+    "db": "database",
+    "js": "javascript",
+    "qa": "quality assurance",
+}
+
+
+def _significant(text: str) -> set:
+    """The meaning-bearing words of a phrase."""
+    words = re.findall(r"[a-z]+", str(text).lower())
+    return {w for w in words if w not in _REQ_FILLER and len(w) > 2}
+
+
+def _reconcile_evidence(requirements: list, profile: dict) -> list:
+    """
+    Never report "no evidence" for something the CV states outright.
+
+    A real case: the CV listed "OOP", "Team Collaboration", "Analytical Thinking" and
+    "Problem Solving", and all four came back "missing" — because the model treated
+    anything short of professional experience as no evidence at all. That is not a
+    judgement call, it is a factual error about the CV's contents, so it is settled
+    here from the parsed profile rather than asked of the model again.
+
+    Upgrades to "partial", never "met": naming a skill is evidence that it is there,
+    not evidence of depth. Matching is deliberately strict — every meaning-bearing
+    word of the profile entry must appear in the requirement — so "Team Collaboration"
+    rescues "teamwork and cross-team collaboration" while nothing rescues a vague
+    "drive for excellence" that the CV genuinely never claims.
+    """
+    claimed = []
+    for field in ("all_skills", "core_skills", "familiar_skills", "soft_skills",
+                  "tools", "practices", "domains", "certifications"):
+        for entry in (profile.get(field) or []):
+            text = str(entry).lower()
+            claimed.append(_significant(_SKILL_ALIASES.get(text.strip(), text)))
+
+    for req in requirements:
+        if str(req.get("verdict", "")).lower() != "missing":
+            continue
+        words = _significant(req.get("text", ""))
+        if not words:
+            continue
+        for entry in claimed:
+            if entry and entry <= words:
+                req["verdict"] = "partial"
+                req["evidence"] = "listed on your CV"
+                break
+    return requirements
+
+
+_ENTRY_JOB_LEVELS = {"internship", "entry level", "entry-level", "entry"}
+_ENTRY_CANDIDATES = {"intern", "entry", "junior"}
+
+
+def _reconcile_seniority(seniority_fit: str, job: dict, profile: dict) -> str:
+    """
+    A new graduate is not "below" an entry-level job.
+
+    LinkedIn states the role's level outright, so when it says entry level and the
+    CV parses as entry level, that is a match by definition — but the model kept
+    reading "0 years experience" as a shortfall and applying the below-level
+    penalty. Only ever upgrades: a genuine shortfall the model spotted stands.
+    """
+    if str(seniority_fit or "").lower() != "below":
+        return seniority_fit
+    level = str(job.get("seniority_level") or "").strip().lower()
+    if level in _ENTRY_JOB_LEVELS and str(profile.get("seniority", "")).lower() in _ENTRY_CANDIDATES:
+        return "match"
+    return seniority_fit
+
+
 # Meeting a job's stated bar is not the same as being a candidate for it. An
 # entry-level sales role that asks only for good English and a willingness to learn
 # is "met" by almost any graduate — which is how a cybersecurity CV scored 95% on
@@ -678,6 +776,10 @@ met = profile clearly satisfies it | partial = adjacent experience or slightly s
 importance: "must" = stated hard requirement, "nice" = preferred/bonus.
 
 Rules: don't award "met" without evidence, or "missing" when the profile plainly shows it.
+Check every requirement against "ALL skills named on the CV" before ruling on it — that
+list is the full record of what the candidate claims. Anything appearing there, or under
+familiar/soft skills/tools/practices, is at least "partial", never "missing". "Missing"
+means the profile does not mention it anywhere.
 An equivalent skill is "met" (Flask satisfies "a Python web framework"; PostgreSQL satisfies "SQL").
 Degrees: "met" if Education lists that level or higher in a related field (a BSc in Computer
 Science meets "bachelor's in CS or related", and a PhD meets a master's requirement). Only use
@@ -691,6 +793,10 @@ field_fit: is this job in the candidate's own field? "same" (their profession),
 "adjacent" (a realistic sideways move — backend dev to data engineer), or
 "different" (a career change — a cybersecurity graduate applying to phone sales).
 Judge the profession, not whether they could scrape through the requirements.
+A degree IS a field: a Computer Science graduate is in software, so any software
+engineering role is "same" even if their projects specialise in one corner of it.
+Use "different" only when the role is unrelated to BOTH their education and their
+skills — not merely because they specialise elsewhere within the same profession.
 
 JSON:
 {{"requirements":[{{"text":"short requirement","importance":"must|nice","verdict":"met|partial|missing","evidence":"max 6 words"}}],
@@ -717,8 +823,11 @@ JSON:
                 raise ValueError("no requirements returned")
 
             requirements = _reconcile_degrees(requirements, profile or {})
+            requirements = _reconcile_evidence(requirements, profile or {})
 
-            score = _score_from_requirements(requirements, data.get("seniority_fit"),
+            seniority_fit = _reconcile_seniority(data.get("seniority_fit"), job, profile or {})
+            data["seniority_fit"] = seniority_fit
+            score = _score_from_requirements(requirements, seniority_fit,
                                              data.get("field_fit"))
 
 

@@ -1935,11 +1935,13 @@ async def job_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TY
             text += "**Requirement by requirement:**\n"
             for r in requirements:
                 verdict = str(r.get('verdict', 'missing')).lower()
-                star = "*" if str(r.get('importance', '')).lower() == "must" else ""
+                # U+2217, not "*": Telegram's legacy Markdown has no backslash escape,
+                # so a real asterisk opened an emphasis span and ate the footer.
+                star = "∗" if str(r.get('importance', '')).lower() == "must" else ""
                 text += f"{icons.get(verdict, '•')} {md(r.get('text', ''))}{star}\n"
                 if r.get('evidence'):
                     text += f"     _{md(r['evidence'])}_\n"
-            text += "\n\\* = required by the posting\n"
+            text += "\n∗ = required by the posting\n"
         elif job.get('unreadable'):
             text += ("⚠️ **Couldn't read this posting.**\n\n"
                      "LinkedIn didn't return the job description, so there is nothing "
