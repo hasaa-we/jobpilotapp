@@ -292,6 +292,7 @@ Return exactly:
   "core_skills": ["skills used substantially, with real evidence in the CV"],
   "familiar_skills": ["skills touched briefly, coursework, or self-taught"],
   "tools": ["frameworks, platforms, databases, tooling"],
+  "practices": ["working practices evidenced in the CV, named plainly: CI/CD, unit testing, code review, Agile, REST API design, containerisation"],
   "domains": ["industries or problem areas worked in"],
   "education": [{{"degree": "string", "field": "string", "institution": "string", "year": "string"}}],
   "certifications": ["string"],
@@ -344,6 +345,9 @@ def _profile_brief(profile: dict, fallback_resume: str = "") -> str:
         f"Core skills (strong evidence): {join('core_skills')}\n"
         f"Familiar skills (light exposure): {join('familiar_skills')}\n"
         f"Tools: {join('tools')}\n"
+        # Without this, "CI pipelines on GitLab" compressed to just "GitLab" and a
+        # CI/CD requirement came back "missing" even though the CV evidenced it.
+        f"Practices: {join('practices')}\n"
         f"Domains: {join('domains')}\n"
         f"Education: {edu}\n"
         f"Certifications: {join('certifications')}\n"
@@ -543,6 +547,8 @@ importance: "must" = stated hard requirement, "nice" = preferred/bonus.
 
 Rules: don't award "met" without evidence, or "missing" when the profile plainly shows it.
 An equivalent skill is "met" (Flask satisfies "a Python web framework"; PostgreSQL satisfies "SQL").
+A degree requirement is "met" when Education lists that degree in that field — not "partial".
+A named tool implies its practice: GitLab/Jenkins/GitHub Actions = CI/CD, pytest/JUnit = testing.
 The candidate is already searching this region — for a location requirement use "met" if their
 stated location fits, "partial" if unstated. Never "missing".
 seniority_fit: is the CANDIDATE "below", "match" or "above" this role's level?
