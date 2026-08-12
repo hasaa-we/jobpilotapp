@@ -1,4 +1,5 @@
 import os
+import re
 import json
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
@@ -209,6 +210,13 @@ Write ONLY the email body (no subject line needed).
 MAX_SCORED_JOBS = 60
 SCORING_CONCURRENCY = 8
 
+# Scoring is the dominant cost in the whole bot: one call per job, up to
+# MAX_SCORED_JOBS of them per search. Set SCORING_MODEL=gpt-4o-mini in the
+# environment to cut that bill by roughly 15-20x — the task is now structured
+# classification (judge each requirement; Python does the arithmetic), which mini
+# handles well, but verify the calibration before trusting it on real searches.
+SCORING_MODEL = os.getenv("SCORING_MODEL", "gpt-4o")
+
 GRADES = (
     (85, "Excellent Match"), (70, "Strong Match"),
     (50, "Good Match"), (35, "Weak Match"), (0, "Poor Match"),
@@ -340,26 +348,54 @@ def _profile_brief(profile: dict, fallback_resume: str = "") -> str:
     )
 
 
-def _requirements_excerpt(description: str, budget: int = 7000) -> str:
-    """
-    Trims a description to fit the prompt without losing the requirements.
+# Paragraphs matching these are pure boilerplate. They're a large share of a typical
+# posting and contain nothing that affects whether a candidate fits, so paying to
+# send them on every one of the scoring calls is waste.
+_BOILERPLATE = re.compile(
+    r"equal opportunit|reasonable accommodation|e-?verify|drug[-\s]free|"
+    r"what we offer|benefits (include|package)|perks|why join|about (us|the company|our)|"
+    r"our (mission|values|culture|story)|diversity|inclusion belong|"
+    r"protected veteran|without regard to race|applicants will receive|"
+    r"click (here|apply)|follow us on|privacy (policy|notice)|cookie",
+    re.I,
+)
 
-    Requirements normally sit at the *end* of a posting, so blind truncation
-    (the old behaviour, at 3000 chars) cut off exactly the section being scored.
+_REQUIREMENT_MARKERS = (
+    "requirement", "qualification", "what you", "who you are", "you have",
+    "skills", "we are looking for", "must have", "your profile", "about you",
+    "responsibilit", "experience", "you will", "nice to have", "preferred",
+)
+
+
+def _requirements_excerpt(description: str, budget: int = 3800) -> str:
     """
-    text = (description or "").strip()
+    Trims a description down to the part that decides the score.
+
+    Two things are going on. Boilerplate paragraphs — benefits, EEO statements,
+    company mission — are dropped outright: they're often half a posting and never
+    change whether someone qualifies. What's left is then budgeted with the
+    requirements section preferred, since it sits at the *end* of most postings and
+    naive truncation removes precisely what's being judged.
+
+    This runs once per job on the hot path, so the saving is multiplied by every
+    job in a search.
+    """
+    text = re.sub(r"\n{3,}", "\n\n", (description or "").strip())
+    if not text:
+        return ""
+
+    kept = [p for p in text.split("\n\n") if not _BOILERPLATE.search(p)]
+    text = "\n\n".join(kept) if kept else text
+
     if len(text) <= budget:
         return text
 
-    markers = ("requirement", "qualification", "what you", "who you are", "you have",
-               "skills", "we are looking for", "must have", "your profile", "about you")
     lowered = text.lower()
-    cut = next((lowered.find(m) for m in markers if lowered.find(m) > 0), -1)
-
+    cut = next((lowered.find(m) for m in _REQUIREMENT_MARKERS if 0 < lowered.find(m) < len(text)), -1)
     if cut > 0:
-        head = text[: budget // 3]
-        tail = text[cut: cut + (budget - budget // 3)]
-        return f"{head}\n\n[...]\n\n{tail}"
+        head = text[: budget // 4]
+        tail = text[cut: cut + (budget - budget // 4)]
+        return f"{head}\n[...]\n{tail}"
     return text[:budget]
 
 
@@ -409,28 +445,28 @@ async def score_job_against_profile(profile_brief: str, job: dict, search_query:
             f"Full posting:\n{_requirements_excerpt(description)}"
         )
         instruction = (
-            "List the substantive requirements the posting actually states — skills, "
-            "years of experience, education, certifications, languages, location and "
-            "work authorisation. Do not invent requirements it does not mention.\n"
-            "Give at most 12, merging duplicates and near-duplicates. Skip generic "
-            "filler such as 'team player', 'good communication' or 'attention to "
-            "detail' unless the role is genuinely built around it — padding the list "
-            "with boilerplate distorts the percentage."
+            "List the substantive requirements the posting states (skills, years, "
+            "education, certifications, languages, location, work authorisation). "
+            "Max 10, merge duplicates, invent nothing. Skip filler like 'team player' "
+            "or 'good communication' — padding distorts the score."
         )
     else:
         job_block = (
             f"Title: {job.get('title')}\nCompany: {job.get('company')}\n"
             f"Location: {job.get('location')}\n{criteria_text}\n\n"
-            f"Full posting: NOT AVAILABLE."
+            f"Posting: NOT AVAILABLE."
         )
         instruction = (
-            "The posting text is unavailable, so infer the 4-6 requirements this "
-            "role type normally carries and mark every one of them inferred:true."
+            "No posting text, so infer the 4-6 requirements this role normally "
+            "carries and set inferred:true on each."
         )
 
-    prompt = f"""You are a precise recruiting screener. Decide how well ONE candidate fits ONE job.
+    # Deliberately terse: this prompt is sent once per job, so every word here is
+    # paid for dozens of times per search. All the judging rules are kept — only
+    # the wording is compressed.
+    prompt = f"""Recruiting screener. Judge how well ONE candidate fits ONE job.
 
-CANDIDATE PROFILE
+CANDIDATE
 {profile_brief}
 
 JOB
@@ -439,44 +475,30 @@ JOB
 TASK
 {instruction}
 
-For each requirement decide, using ONLY the candidate profile above:
-- "met"     — the profile clearly satisfies it
-- "partial" — related or adjacent experience, or slightly short on years
-- "missing" — no evidence in the profile
+Verdict per requirement, using ONLY the candidate profile:
+met = profile clearly satisfies it | partial = adjacent experience or slightly short on years | missing = no evidence.
+importance: "must" = stated hard requirement, "nice" = preferred/bonus.
 
-Mark "importance": "must" for stated hard requirements, "nice" for preferred or bonus items.
-Judge honestly. Do not award "met" for a skill the profile does not evidence, and do
-not mark something "missing" when the profile plainly shows it.
+Rules: don't award "met" without evidence, or "missing" when the profile plainly shows it.
+An equivalent skill is "met" (Flask satisfies "a Python web framework"; PostgreSQL satisfies "SQL").
+The candidate is already searching this region — for a location requirement use "met" if their
+stated location fits, "partial" if unstated. Never "missing".
+seniority_fit: is the CANDIDATE "below", "match" or "above" this role's level?
 
-Treat a closely equivalent skill as "met", not "missing" — Flask experience satisfies
-"a Python web framework", and PostgreSQL satisfies "SQL". Reserve "missing" for a
-genuine absence.
-The candidate is already searching in this job's region, so never mark a location
-requirement "missing" merely because the profile omits a location; use "met" when the
-stated location fits and "partial" when it is simply unstated.
-
-Also judge "seniority_fit": is the CANDIDATE "below", "match", or "above" this role's level?
-
-Return JSON:
-{{
-  "requirements": [
-    {{"text": "short requirement", "importance": "must"|"nice",
-      "verdict": "met"|"partial"|"missing", "evidence": "brief why", "inferred": true|false}}
-  ],
-  "seniority_fit": "below"|"match"|"above",
-  "verdict_summary": "one sentence on the overall fit"
-}}"""
+JSON:
+{{"requirements":[{{"text":"short requirement","importance":"must|nice","verdict":"met|partial|missing","evidence":"max 8 words","inferred":false}}],
+"seniority_fit":"below|match|above","verdict_summary":"one short sentence"}}"""
 
     for attempt in range(2):
         try:
             response = await client.chat.completions.create(
-                model="gpt-4o",
+                model=SCORING_MODEL,
                 response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": "You are a precise recruiting screener. Output raw JSON only."},
-                    {"role": "user", "content": prompt},
-                ],
+                messages=[{"role": "user", "content": prompt}],
                 temperature=0,
+                # Output is the expensive half. Ten requirements with short evidence
+                # fit comfortably; the cap only stops a runaway response.
+                max_tokens=700,
             )
             data = json.loads(response.choices[0].message.content)
             requirements = data.get("requirements") or []
@@ -749,7 +771,7 @@ Your job is to determine if this email is related to a job application and extra
 Subject: {email_subject}
 From: {email_sender}
 Body:
-{email_body}
+{email_body[:1800]}
 
 === OUTPUT FORMAT ===
 Return ONLY valid JSON:
