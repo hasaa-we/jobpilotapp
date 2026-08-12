@@ -186,8 +186,19 @@ def get_or_create_inbox_token(user_id: str) -> str:
 
 # ─── Search Credits ───
 
-FREE_SEARCHES_PER_MONTH = 5   # resets on the 1st
-CREDITS_PER_PACK = 200        # what one purchase buys
+# Billing is in AI tokens rather than searches, so every kind of usage draws from
+# one balance — a search, interview prep, CV parsing, email classification. Charging
+# per search let interview prep (about five times the cost of a search) run free and
+# unbounded.
+#
+# Measured: one search is ~32,000 tokens (26.7k in, 5.3k out) on gpt-4o-mini.
+TOKENS_PER_SEARCH = 32_000          # for turning a balance into "about N searches"
+FREE_TOKENS_PER_MONTH = 200_000     # ~6 searches, resets on the 1st
+TOKENS_PER_PACK = 6_500_000         # $3 buys ~200 searches; costs ~$1.47 to serve
+
+# Kept for the display strings.
+FREE_SEARCHES_PER_MONTH = FREE_TOKENS_PER_MONTH // TOKENS_PER_SEARCH
+SEARCHES_PER_PACK = TOKENS_PER_PACK // TOKENS_PER_SEARCH
 
 
 def _current_period() -> str:
@@ -197,58 +208,59 @@ def _current_period() -> str:
 
 def get_credits(user_id: str) -> dict:
     """
-    Returns {'free_left', 'paid', 'total'}.
+    Token balance: {'free_left', 'paid', 'total', 'searches'}.
 
-    The free allowance rolls over lazily: if the stored period isn't this month,
-    it already counts as reset. Nothing scheduled has to run for that to be true.
+    The free allowance rolls over lazily — if the stored period isn't this month it
+    already counts as reset, so nothing scheduled has to run.
     """
     supabase = get_supabase()
     response = supabase.table("users").select(
-        "search_credits, free_searches_used, free_period"
+        "ai_tokens, free_tokens_used, free_period"
     ).eq("id", user_id).execute()
     if not response.data:
-        return {"free_left": 0, "paid": 0, "total": 0}
+        return {"free_left": 0, "paid": 0, "total": 0, "searches": 0}
 
     row = response.data[0]
-    paid = row.get("search_credits") or 0
-    used = row.get("free_searches_used") or 0
+    paid = row.get("ai_tokens") or 0
+    used = row.get("free_tokens_used") or 0
     if row.get("free_period") != _current_period():
-        used = 0                                    # new month, allowance restored
+        used = 0                                   # new month, allowance restored
 
-    free_left = max(0, FREE_SEARCHES_PER_MONTH - used)
-    return {"free_left": free_left, "paid": paid, "total": free_left + paid}
+    free_left = max(0, FREE_TOKENS_PER_MONTH - used)
+    total = free_left + paid
+    return {"free_left": free_left, "paid": paid, "total": total,
+            "searches": total // TOKENS_PER_SEARCH}
 
 
-def consume_credit(user_id: str, amount: int = 1) -> bool:
+def has_tokens(user_id: str, needed: int = TOKENS_PER_SEARCH) -> bool:
+    """Whether there is enough left to start an action of roughly this size."""
+    return get_credits(user_id)["total"] >= needed
+
+
+def consume_tokens(user_id: str, tokens: int) -> None:
     """
-    Spends one search: the free monthly allowance first, then purchased credits.
+    Deducts what an action actually used: free allowance first, then purchased.
 
-    Free before paid matters — spending someone's purchase while they still have
-    free searches left would be taking money for nothing.
-
-    Read-then-write, so two searches fired at the same instant could both pass the
-    check. Losing a credit occasionally is the right way to fail here; the
-    alternative is a database function for something worth a fraction of a cent.
+    Charged after the work, from the API's own usage numbers, so nobody is billed
+    for a search that failed. The cost is that a single action can overshoot a
+    nearly-empty balance — capped at zero rather than left negative, since being
+    slightly generous is the right way to fail over a fraction of a cent.
     """
+    if tokens <= 0:
+        return
+
     balance = get_credits(user_id)
-    if balance["total"] < amount:
-        return False
-
-    supabase = get_supabase()
-    period = _current_period()
-
-    from_free = min(amount, balance["free_left"])
-    from_paid = amount - from_free
+    from_free = min(tokens, balance["free_left"])
+    from_paid = min(tokens - from_free, balance["paid"])
 
     update = {
-        "free_searches_used": (FREE_SEARCHES_PER_MONTH - balance["free_left"]) + from_free,
-        "free_period": period,
+        "free_tokens_used": (FREE_TOKENS_PER_MONTH - balance["free_left"]) + from_free,
+        "free_period": _current_period(),
     }
     if from_paid:
-        update["search_credits"] = balance["paid"] - from_paid
+        update["ai_tokens"] = balance["paid"] - from_paid
 
-    supabase.table("users").update(update).eq("id", user_id).execute()
-    return True
+    get_supabase().table("users").update(update).eq("id", user_id).execute()
 
 
 def add_credits(user_id: str, credits: int, stripe_event_id: str,
@@ -274,7 +286,7 @@ def add_credits(user_id: str, credits: int, stripe_event_id: str,
         return False
 
     supabase.table("users").update(
-        {"search_credits": get_credits(user_id)["paid"] + credits}
+        {"ai_tokens": get_credits(user_id)["paid"] + credits}
     ).eq("id", user_id).execute()
     return True
 

@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 from database import (
     update_user_profile, add_gmail_account, get_user_by_inbox_token,
-    get_user_by_telegram_id, add_credits, CREDITS_PER_PACK
+    get_user_by_telegram_id, add_credits, TOKENS_PER_PACK, SEARCHES_PER_PACK
 )
 from gmail_services import (
     get_auth_url, exchange_code_for_token, encrypt_token, verify_oauth_state
@@ -406,7 +406,7 @@ async def stripe_webhook(request: Request):
         return {"ok": True, "ignored": "unknown user"}
 
     credited = add_credits(
-        db_user["id"], CREDITS_PER_PACK, event["id"],
+        db_user["id"], TOKENS_PER_PACK, event["id"],
         session.get("amount_total"), session.get("currency"),
     )
     if credited:

@@ -27,12 +27,12 @@ CREATE TABLE users (
     -- Private token in the user's forwarding address (u<token>@inbox.<domain>).
     -- Mail sent there is matched back to this user, so treat it as a secret.
     inbox_token TEXT UNIQUE,
-    -- Purchased searches. Never expire and are never reset.
-    search_credits INTEGER DEFAULT 0,
+    -- Purchased AI tokens. Never expire and are never reset.
+    ai_tokens BIGINT DEFAULT 0,
     -- Free monthly allowance, tracked apart from purchases so a reset can never
     -- wipe something paid for. free_period is 'YYYY-MM'; a different month means
     -- the allowance has already rolled over, so no scheduled job is needed.
-    free_searches_used INTEGER DEFAULT 0,
+    free_tokens_used BIGINT DEFAULT 0,
     free_period TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
 );

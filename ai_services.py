@@ -10,6 +10,43 @@ load_dotenv()
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
+# ─── Token Metering ───
+#
+# Users are billed in AI tokens, so every call has to be counted no matter which
+# function made it. Wrapping the client once means a new AI feature is metered
+# automatically instead of relying on whoever adds it to remember.
+#
+# A ContextVar rather than a global: searches for different users run concurrently
+# in the same process, and a global counter would bill them to whoever finished last.
+
+import contextvars
+
+_usage_counter = contextvars.ContextVar("ai_usage", default=None)
+_raw_create = client.chat.completions.create
+
+
+async def _metered_create(**kwargs):
+    response = await _raw_create(**kwargs)
+    counter = _usage_counter.get()
+    usage = getattr(response, "usage", None)
+    if counter is not None and usage is not None:
+        counter["input"] += usage.prompt_tokens
+        counter["output"] += usage.completion_tokens
+        counter["total"] += usage.total_tokens
+        counter["calls"] += 1
+    return response
+
+
+client.chat.completions.create = _metered_create
+
+
+def start_metering() -> dict:
+    """Begins counting tokens for one user action. Returns the live counter."""
+    counter = {"input": 0, "output": 0, "total": 0, "calls": 0}
+    _usage_counter.set(counter)
+    return counter
+
+
 # ─── Resume Tailor ───
 
 async def tailor_resume(resume_text: str, job_description: str, target_role: str = None) -> dict:

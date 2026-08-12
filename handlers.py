@@ -14,7 +14,8 @@ from database import (
     save_generated_doc, get_user_stats,
     get_gmail_accounts, update_gmail_account_sync, remove_gmail_account,
     delete_user_cv, get_or_create_inbox_token,
-    get_credits, consume_credit, FREE_SEARCHES_PER_MONTH, CREDITS_PER_PACK
+    get_credits, has_tokens, consume_tokens,
+    FREE_SEARCHES_PER_MONTH, SEARCHES_PER_PACK, TOKENS_PER_SEARCH
 )
 from ai_services import (
     tailor_resume, generate_cover_letter,
@@ -347,15 +348,15 @@ def buy_credits_keyboard(db_user: dict) -> InlineKeyboardMarkup:
     if link:
         joiner = "&" if "?" in link else "?"
         rows.append([InlineKeyboardButton(
-            f"💳 Buy {CREDITS_PER_PACK} searches",
+            f"💳 Buy ~{SEARCHES_PER_PACK} more searches — $3",
             url=f"{link}{joiner}client_reference_id={db_user['telegram_id']}",
         )])
     return InlineKeyboardMarkup(rows) if rows else None
 
 
 async def require_credit(update: Update, context: ContextTypes.DEFAULT_TYPE, db_user: dict) -> bool:
-    """Spends one credit, or explains why the search didn't run."""
-    if consume_credit(db_user['id']):
+    """Checks there's enough balance to start, or explains why the search didn't run."""
+    if has_tokens(db_user['id'], TOKENS_PER_SEARCH):
         return True
 
     chat_id = update.effective_chat.id
@@ -364,8 +365,8 @@ async def require_credit(update: Update, context: ContextTypes.DEFAULT_TYPE, db_
         "🔒 **You're out of searches**\n\n"
         f"You've used all {FREE_SEARCHES_PER_MONTH} of your free searches this month. "
         "They reset on the 1st.\n\n"
-        f"**{CREDITS_PER_PACK} more searches — $3**\n"
-        "One-off payment, no subscription. Credits never expire.\n\n"
+        f"**~{SEARCHES_PER_PACK} more searches — $3**\n"
+        "One-off payment, no subscription. Never expires.\n\n"
         "_Email tracking stays free and unlimited — keep forwarding your job emails._"
     )
     if not keyboard:
@@ -378,16 +379,20 @@ async def credits_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows the remaining balance and how to top up."""
     user = update.effective_user
     db_user, _ = get_or_create_user(user.id, user.username)
-    left = get_credits(db_user['id'])
+    balance = get_credits(db_user['id'])
+    left = balance["searches"]
 
-    text = (f"💳 **Your searches**\n\n"
-            f"Remaining: **{left}**\n\n"
-            f"Each LinkedIn search costs 1 credit. Email tracking, your CV, your "
-            f"pipeline and interview prep are all free.")
-    if left <= 2:
-        text += f"\n\n**{CREDITS_PER_PACK} searches — $3.** One-off, never expires."
+    text = (f"💳 **Your balance**\n\n"
+            f"**≈ {left} searches** remaining\n\n"
+            f"🆓 Free this month: {balance['free_left']:,} tokens _(resets on the 1st)_\n"
+            f"💳 Purchased: {balance['paid']:,} tokens _(never expire)_\n\n"
+            f"Everything the AI does draws from this — searching, interview prep, "
+            f"reading your CV, classifying forwarded email. A search is about "
+            f"{TOKENS_PER_SEARCH:,} tokens.")
+    if left <= 3:
+        text += f"\n\n**~{SEARCHES_PER_PACK} searches for $3.** One-off, never expires."
     await update.message.reply_text(
-        text, reply_markup=buy_credits_keyboard(db_user) if left <= 2 else None,
+        text, reply_markup=buy_credits_keyboard(db_user) if left <= 3 else None,
         parse_mode="Markdown",
     )
 
@@ -1567,6 +1572,11 @@ async def run_job_search(update, context, db_user, keywords, location, date_post
     if not await require_credit(update, context, db_user):
         return
 
+    # Meter from here: every AI call this search makes is counted and charged
+    # afterwards from the API's own usage numbers, so a failed search is free.
+    from ai_services import start_metering
+    meter = start_metering()
+
     resolved_loc, _ = resolve_location(location)
     has_post_filters = bool(work_type or job_type or experience_level)
 
@@ -1608,6 +1618,7 @@ async def run_job_search(update, context, db_user, keywords, location, date_post
             f"❌ LinkedIn returned no postings for `{md(keywords)}` in `{md(resolved_loc)}`.",
             reply_markup=open_kb, parse_mode="Markdown"
         )
+        consume_tokens(db_user['id'], meter['total'])
         return
 
     if has_post_filters:
@@ -1651,6 +1662,7 @@ async def run_job_search(update, context, db_user, keywords, location, date_post
             f"but none match all of these:\n{filter_summary(context)}",
             reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
         )
+        consume_tokens(db_user['id'], meter['total'])
         return
 
     from ai_services import match_jobs_to_profile
@@ -1674,11 +1686,15 @@ async def run_job_search(update, context, db_user, keywords, location, date_post
 
     if not good_jobs:
         await context.bot.send_message(chat_id, f"❌ Couldn't score results for `{md(keywords)}`. Try different keywords.", parse_mode="Markdown")
+        consume_tokens(db_user['id'], meter['total'])
         return
 
     context.user_data['last_search_jobs'] = good_jobs
     context.user_data['last_search_kw'] = keywords
     context.user_data['last_search_loc'] = resolved_loc
+
+    consume_tokens(db_user['id'], meter['total'])
+    print(f"Search used {meter['total']:,} tokens across {meter['calls']} calls")
 
     total = len(good_jobs)
     keyboard = [
