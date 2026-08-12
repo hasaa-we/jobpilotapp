@@ -2,7 +2,10 @@ import os
 import re
 import tempfile
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup,
+    KeyboardButton, LabeledPrice
+)
 from telegram.ext import ContextTypes, ConversationHandler
 from PyPDF2 import PdfReader
 
@@ -14,8 +17,8 @@ from database import (
     save_generated_doc, get_user_stats,
     get_gmail_accounts, update_gmail_account_sync, remove_gmail_account,
     delete_user_cv, get_or_create_inbox_token,
-    get_credits, has_tokens, consume_tokens,
-    FREE_SEARCHES_PER_MONTH, SEARCHES_PER_PACK, TOKENS_PER_SEARCH
+    get_credits, has_tokens, consume_tokens, add_credits,
+    FREE_SEARCHES_PER_MONTH, SEARCHES_PER_PACK, TOKENS_PER_SEARCH, TOKENS_PER_PACK
 )
 from ai_services import (
     tailor_resume, generate_cover_letter,
@@ -338,20 +341,83 @@ STATUS_EMOJI = {
 
 # ─── Search Credits ───
 
-def buy_credits_keyboard(db_user: dict) -> InlineKeyboardMarkup:
+# Telegram Stars. Payment happens inside Telegram, so there is no merchant account,
+# no card processor and no country restriction — which is what makes this work at
+# all from Lebanon, where Stripe cannot operate.
+PACK_PRICE_STARS = int(os.getenv("PACK_PRICE_STARS", "150"))
+
+
+def buy_credits_keyboard(db_user: dict = None) -> InlineKeyboardMarkup:
+    """Button that opens the in-chat Stars invoice."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"⭐ Buy ~{SEARCHES_PER_PACK} searches — {PACK_PRICE_STARS} Stars",
+                             callback_data="buy_tokens")
+    ]])
+
+
+async def buy_tokens_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sends the Stars invoice."""
+    query = update.callback_query
+    await query.answer()
+    await context.bot.send_invoice(
+        chat_id=update.effective_chat.id,
+        title=f"{SEARCHES_PER_PACK} job searches",
+        description=(
+            f"{TOKENS_PER_PACK:,} AI tokens — about {SEARCHES_PER_PACK} LinkedIn searches "
+            f"scored against your CV. Also covers interview prep and email tracking. "
+            f"Never expires."
+        ),
+        payload=f"tokens:{TOKENS_PER_PACK}",
+        # Stars use the XTR currency and, unlike card payments, need no provider token.
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice(label=f"{SEARCHES_PER_PACK} searches", amount=PACK_PRICE_STARS)],
+    )
+
+
+async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Buy button. Stripe is told which account to credit via client_reference_id —
-    without it a payment arrives with no way to know whose it was.
+    Telegram asks for approval moments before charging.
+
+    It must be answered within ~10 seconds or the payment fails, so this stays
+    trivial — no database work, no validation that could hang.
     """
-    link = os.getenv("STRIPE_PAYMENT_LINK")
-    rows = []
-    if link:
-        joiner = "&" if "?" in link else "?"
-        rows.append([InlineKeyboardButton(
-            f"💳 Buy ~{SEARCHES_PER_PACK} more searches — $3",
-            url=f"{link}{joiner}client_reference_id={db_user['telegram_id']}",
-        )])
-    return InlineKeyboardMarkup(rows) if rows else None
+    await update.pre_checkout_query.answer(ok=True)
+
+
+async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Credits the tokens once Telegram confirms the Stars payment."""
+    payment = update.message.successful_payment
+    user = update.effective_user
+    db_user, _ = get_or_create_user(user.id, user.username)
+
+    tokens = TOKENS_PER_PACK
+    if (payment.invoice_payload or "").startswith("tokens:"):
+        try:
+            tokens = int(payment.invoice_payload.split(":", 1)[1])
+        except ValueError:
+            pass
+
+    # charge_id is unique per payment, so a duplicate update can't credit twice.
+    credited = add_credits(
+        db_user['id'], tokens,
+        payment.telegram_payment_charge_id,
+        payment.total_amount, payment.currency,
+    )
+
+    balance = get_credits(db_user['id'])
+    if credited:
+        await update.message.reply_text(
+            f"✅ **Thank you!**\n\n"
+            f"**{tokens:,} tokens** added — about **{tokens // TOKENS_PER_SEARCH} searches**.\n"
+            f"They never expire.\n\n"
+            f"Balance: ≈ **{balance['searches']} searches**",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(
+            f"This payment was already credited.\n\nBalance: ≈ {balance['searches']} searches"
+        )
 
 
 async def require_credit(update: Update, context: ContextTypes.DEFAULT_TYPE, db_user: dict) -> bool:

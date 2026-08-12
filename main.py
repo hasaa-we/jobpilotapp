@@ -1,7 +1,5 @@
 import os
 import hmac
-import json
-import time
 import asyncio
 import hashlib
 from contextlib import asynccontextmanager
@@ -9,12 +7,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import RedirectResponse
 from telegram import Update, BotCommand
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ConversationHandler, ContextTypes
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
+    PreCheckoutQueryHandler, filters, ConversationHandler, ContextTypes
+)
 from dotenv import load_dotenv
 
 from database import (
     update_user_profile, add_gmail_account, get_user_by_inbox_token,
-    get_user_by_telegram_id, add_credits, TOKENS_PER_PACK, SEARCHES_PER_PACK
+    get_user_by_telegram_id
 )
 from gmail_services import (
     get_auth_url, exchange_code_for_token, encrypt_token, verify_oauth_state
@@ -42,6 +43,7 @@ from handlers import (
     cv_callback_handler, job_analysis_callback, track_job_callback,
     show_jobs_count_callback, show_jobs_more_callback,
     ingest_job_emails, forwarding_command, forwarding_callback, credits_command,
+    buy_tokens_callback, precheckout_callback, successful_payment_callback,
     interview_prep_callback
 )
 
@@ -124,6 +126,10 @@ ptb_app.add_handler(CallbackQueryHandler(track_job_callback, pattern="^track_job
 ptb_app.add_handler(CallbackQueryHandler(find_jobs_relax_callback, pattern="^fj_relax$"))
 ptb_app.add_handler(CallbackQueryHandler(forwarding_callback, pattern="^show_forwarding$"))
 ptb_app.add_handler(CallbackQueryHandler(interview_prep_callback, pattern="^prep(_more)?:"))
+ptb_app.add_handler(CallbackQueryHandler(buy_tokens_callback, pattern="^buy_tokens$"))
+# Stars payments: approve the charge, then credit once Telegram confirms it.
+ptb_app.add_handler(PreCheckoutQueryHandler(precheckout_callback))
+ptb_app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
 ptb_app.add_handler(CallbackQueryHandler(show_jobs_count_callback, pattern="^show_jobs:\d+$"))
 ptb_app.add_handler(CallbackQueryHandler(show_jobs_more_callback, pattern="^show_jobs_more:"))
 ptb_app.add_handler(CallbackQueryHandler(button_handler))
@@ -353,75 +359,6 @@ async def inbound_email(request: Request):
         print(f"Could not notify {db_user.get('telegram_id')}: {e}")
 
     return {"ok": True, "processed": len(records), **{k: result[k] for k in ('found', 'added', 'updated')}}
-
-
-def _stripe_signature_valid(payload: bytes, header: str, secret: str, tolerance: int = 300) -> bool:
-    """
-    Verifies Stripe's webhook signature.
-
-    Without this the endpoint is a button anyone on the internet can press to mint
-    themselves credits. Stripe signs `timestamp.body` with the endpoint secret; the
-    timestamp check stops a captured request being replayed later.
-    """
-    try:
-        parts = dict(p.split("=", 1) for p in header.split(",") if "=" in p)
-        timestamp, signature = parts["t"], parts["v1"]
-    except Exception:
-        return False
-
-    if abs(time.time() - int(timestamp)) > tolerance:
-        return False
-
-    expected = hmac.new(
-        secret.encode(), f"{timestamp}.".encode() + payload, hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature)
-
-
-@app.post("/stripe/webhook")
-async def stripe_webhook(request: Request):
-    """Credits a user's account after a successful payment."""
-    secret = os.getenv("STRIPE_WEBHOOK_SECRET")
-    payload = await request.body()
-
-    if not secret or not _stripe_signature_valid(
-        payload, request.headers.get("stripe-signature", ""), secret
-    ):
-        raise HTTPException(status_code=400, detail="bad signature")
-
-    event = json.loads(payload)
-    if event.get("type") != "checkout.session.completed":
-        return {"ok": True, "ignored": event.get("type")}
-
-    session = event["data"]["object"]
-    # Set by the buy button; without it a payment can't be matched to an account.
-    telegram_id = session.get("client_reference_id")
-    if not telegram_id:
-        print(f"Stripe session {session.get('id')} has no client_reference_id — cannot credit")
-        return {"ok": True, "ignored": "no client_reference_id"}
-
-    db_user = get_user_by_telegram_id(int(telegram_id))
-    if not db_user:
-        print(f"Stripe payment for unknown telegram_id {telegram_id}")
-        return {"ok": True, "ignored": "unknown user"}
-
-    credited = add_credits(
-        db_user["id"], TOKENS_PER_PACK, event["id"],
-        session.get("amount_total"), session.get("currency"),
-    )
-    if credited:
-        try:
-            await ptb_app.bot.send_message(
-                chat_id=int(telegram_id),
-                text=(f"✅ **Payment received — thank you!**\n\n"
-                      f"**{CREDITS_PER_PACK} searches** have been added to your account.\n"
-                      f"They never expire. Tap 🔍 Find Jobs to use them."),
-                parse_mode="Markdown",
-            )
-        except Exception as e:
-            print(f"Credited {telegram_id} but couldn't notify them: {e}")
-
-    return {"ok": True, "credited": credited}
 
 
 @app.get("/health")

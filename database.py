@@ -263,26 +263,26 @@ def consume_tokens(user_id: str, tokens: int) -> None:
     get_supabase().table("users").update(update).eq("id", user_id).execute()
 
 
-def add_credits(user_id: str, credits: int, stripe_event_id: str,
+def add_credits(user_id: str, credits: int, charge_id: str,
                 amount_cents: int = None, currency: str = None) -> bool:
     """
     Credits a purchase, once.
 
-    Stripe retries webhooks until it gets a 2xx, so the same payment arrives more
-    than once. The unique constraint on stripe_event_id is what makes a repeat a
-    no-op instead of free credits.
+    Telegram can deliver the same successful_payment update more than once, and a
+    user could tap an old invoice twice, so the unique constraint on the payment's
+    charge id is what makes a repeat a no-op instead of free tokens.
     """
     supabase = get_supabase()
     try:
         supabase.table("credit_purchases").insert({
             "user_id": user_id,
-            "stripe_event_id": stripe_event_id,
+            "stripe_event_id": charge_id,   # column predates Stars; holds any charge id
             "credits": credits,
             "amount_cents": amount_cents,
             "currency": currency,
         }).execute()
     except Exception as e:
-        print(f"Purchase {stripe_event_id} already recorded, not crediting again: {e}")
+        print(f"Purchase {charge_id} already recorded, not crediting again: {e}")
         return False
 
     supabase.table("users").update(
