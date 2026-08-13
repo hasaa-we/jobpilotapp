@@ -282,8 +282,16 @@ def add_credits(user_id: str, credits: int, charge_id: str,
             "currency": currency,
         }).execute()
     except Exception as e:
-        print(f"Purchase {charge_id} already recorded, not crediting again: {e}")
-        return False
+        # Only a unique-constraint violation means "already credited". Treating every
+        # error that way is how a customer paid 150 Stars, hit an RLS failure, and was
+        # told his payment was already credited while receiving nothing. Anything else
+        # is a real failure and must be raised so the caller can say so.
+        text = str(e)
+        if "23505" in text or "duplicate key" in text.lower():
+            print(f"Purchase {charge_id} already recorded, not crediting again")
+            return False
+        print(f"CREDITING FAILED for {charge_id} — customer paid and got nothing: {e}")
+        raise
 
     supabase.table("users").update(
         {"ai_tokens": get_credits(user_id)["paid"] + credits}

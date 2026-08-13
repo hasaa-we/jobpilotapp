@@ -398,11 +398,24 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
             pass
 
     # charge_id is unique per payment, so a duplicate update can't credit twice.
-    credited = add_credits(
-        db_user['id'], tokens,
-        payment.telegram_payment_charge_id,
-        payment.total_amount, payment.currency,
-    )
+    try:
+        credited = add_credits(
+            db_user['id'], tokens,
+            payment.telegram_payment_charge_id,
+            payment.total_amount, payment.currency,
+        )
+    except Exception as e:
+        # The money has already left their account, so silence is the worst option:
+        # tell them plainly, and log the charge id so it can be honoured by hand.
+        print(f"PAYMENT NOT CREDITED user={db_user['id']} "
+              f"charge={payment.telegram_payment_charge_id} tokens={tokens}: {e}")
+        await update.message.reply_text(
+            "⚠️ Your payment went through, but I couldn't add the searches to your "
+            "account. Nothing is lost — send me a message and it will be added by hand.\n\n"
+            f"Reference: `{payment.telegram_payment_charge_id}`",
+            parse_mode="Markdown",
+        )
+        return
 
     balance = get_credits(db_user['id'])
     if credited:
